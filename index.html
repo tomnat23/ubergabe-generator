@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Übergabe-Generator</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --card: #ffffff; --text: #1d2330; --muted: #5d6677;
+    --line: #d6dae2; --accent: #1f5fbf; --accent-text: #ffffff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14171d; --card: #1d222b; --text: #e7eaf0; --muted: #9aa4b5;
+      --line: #343b48; --accent: #5b9bf0; --accent-text: #0b1220;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 16px; background: var(--bg); color: var(--text);
+    font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 1100px; margin: 0 auto; }
+  h1 { font-size: 1.4rem; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 16px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 10px; padding: 14px; margin-bottom: 14px;
+  }
+  .row { display: flex; flex-wrap: wrap; gap: 12px; }
+  .row > label { flex: 1 1 180px; }
+  label { display: block; font-weight: 600; font-size: .85rem; color: var(--muted); }
+  input, select, textarea {
+    width: 100%; margin-top: 4px; padding: 8px 10px; color: var(--text);
+    background: var(--bg); border: 1px solid var(--line); border-radius: 6px; font: inherit;
+  }
+  textarea { min-height: 200px; resize: vertical; font-family: ui-monospace, Consolas, monospace; font-size: .85rem; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 760px) { .cols { grid-template-columns: 1fr; } }
+  .actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  button {
+    padding: 9px 16px; border-radius: 6px; border: 1px solid var(--line);
+    background: var(--card); color: var(--text); font: inherit; cursor: pointer;
+  }
+  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
+  button:disabled { opacity: .5; cursor: default; }
+  #msg { color: var(--muted); font-size: .9rem; }
+  #msg.err { color: #c0392b; }
+  pre#report {
+    margin: 0; padding: 12px; overflow-x: auto; white-space: pre;
+    background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
+    font: .85rem/1.4 ui-monospace, Consolas, monospace;
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>Übergabe-Generator</h1>
+  <p class="sub">Wklej notatki i listę zleceń, kliknij „Generuj”. Dane zostają w tej przeglądarce.</p>
+
+  <section class="card">
+    <div class="row">
+      <label>Datum <input type="date" id="date"></label>
+      <label>Schicht
+        <select id="shift">
+          <option>Frühschicht</option>
+          <option>Spätschicht</option>
+          <option>Nachtschicht</option>
+        </select>
+      </label>
+      <label>Disponent <input type="text" id="who" placeholder="Name"></label>
+    </div>
+  </section>
+
+  <section class="cols">
+    <div class="card">
+      <label for="orders">Zlecenia (kopia z Excela, pierwszy wiersz = nagłówki)</label>
+      <textarea id="orders" spellcheck="false"></textarea>
+    </div>
+    <div class="card">
+      <label for="notes">Notatki (dowolny tekst)</label>
+      <textarea id="notes" spellcheck="false"></textarea>
+    </div>
+  </section>
+
+  <section class="card actions">
+    <button class="primary" id="gen">Generuj</button>
+    <button id="sample">Wczytaj przykład</button>
+    <button id="clear">Wyczyść pola</button>
+    <span id="msg"></span>
+  </section>
+
+  <section class="card">
+    <div class="actions" style="margin-bottom:10px">
+      <strong>Raport</strong>
+      <button id="copy" disabled>Kopiuj raport</button>
+    </div>
+    <pre id="report">Tu pojawi się raport.</pre>
+  </section>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var SAMPLE_ORDERS = [
+    "LKW\tKennzeichen\tAuftrag\tKunde\tRoute\tPlan\tETA\tStatus",
+    "LKW 01\tBS-TK 1201\tA-24811\tVolkswagen Logistik\tWolfsburg - Poznań\t08:00\t08:00\tErledigt",
+    "LKW 02\tBS-TK 1202\tA-24812\tBosch Hildesheim\tHildesheim - Lyon\t10:30\t14:10\tVerspätet",
+    "LKW 03\tWF-LM 330\tA-24815\tSalzgitter AG\tSalzgitter - Gdańsk\t12:00\t12:00\tUnterwegs",
+    "LKW 04\tHE-DK 77\tA-24819\tMetro Cash&Carry\tHelmstedt - Praha\t13:45\t15:20\tVerspätet",
+    "LKW 05\tBS-TK 1205\tA-24823\tContinental\tHannover - Gliwice\t15:00\t15:00\tBeladen",
+    "LKW 06\tWF-LM 332\tA-24826\tSiemens Energy\tBraunschweig - Rotterdam\t16:30\t16:30\tUnterwegs",
+    "LKW 07\tHE-DK 79\tA-24830\tAldi Süd\tMagdeburg - Wrocław\t18:00\t\tPanne",
+    "LKW 08\tBS-TK 1208\tA-24833\tKNAUF\tPeine - Łódź\t19:15\t19:15\tEntladen"
+  ].join("\n");
+
+  var SAMPLE_NOTES = [
+    "zmiana pn nocna, ogólnie spokojnie ale kilka rzeczy do dokończenia",
+    "",
+    "LKW 02 stoi w korku na A7 przed Lyonem?? kierowca mówi że ok 2h, klient Bosch uprzedzony (dzwoniłem ok 11) - Frau Becker chce potwierdzenie nowej godziny rozładunku bis 16 Uhr",
+    "",
+    "LKW 04 Verspätung wegen Zoll Grenze CZ, Herr Novák von Metro wartet, muss noch Slot bestätigen - Kowalski zadzwoni do spedycji do 17:00",
+    "",
+    "LKW 07 PANNE!! Reifen hinten links, Werkstatt kommt, kierowca Piotr czeka od 17:40. trzeba ustalić czy podstawić zastępczy - decyzja Schmidt, jutro rano najpóźniej 6:00",
+    "",
+    "faktura dla Salzgitter AG jeszcze nie wysłana (Anna z księgowości, do piątku)",
+    "",
+    "brak CMR przy A-24815?? sprawdzić z kierowcą LKW 03 jak dojedzie",
+    "",
+    "Müller prosił o raport tankowania z zeszłego tygodnia, nie zrobione, chyba do środy",
+    "",
+    "LKW 05 beladen, wyjazd planowo 15:00, ok. nic do roboty",
+    "parking na dziedzińcu - brama zepsuta, Hausmeister wie, ale nikt nie dał terminu"
+  ].join("\n");
+
+  var $ = function (id) { return document.getElementById(id); };
+  var el = {
+    date: $("date"), shift: $("shift"), who: $("who"),
+    orders: $("orders"), notes: $("notes"),
+    gen: $("gen"), sample: $("sample"), clear: $("clear"),
+    copy: $("copy"), report: $("report"), msg: $("msg")
+  };
+
+  var lastReport = "";
+
+  function todayISO() {
+    var d = new Date();
+    var m = String(d.getMonth() + 1).padStart(2, "0");
+    var day = String(d.getDate()).padStart(2, "0");
+    return d.getFullYear() + "-" + m + "-" + day;
+  }
+
+  function dateDE(iso) {
+    var p = (iso || "").split("-");
+    return p.length === 3 ? p[2] + "." + p[1] + "." + p[0] : "—";
+  }
+
+  function say(text, isErr) {
+    el.msg.textContent = text || "";
+    el.msg.className = isErr ? "err" : "";
+  }
+
+  // Wykrywa separator: tabulator (Excel) > średnik > pionowa kreska.
+  function detectDelimiter(headerLine) {
+    if (headerLine.indexOf("\t") !== -1) return "\t";
+    if (headerLine.indexOf(";") !== -1) return ";";
+    if (headerLine.indexOf("|") !== -1) return "|";
+    return null;
+  }
+
+  // Zwraca { header: [...], rows: [[...], ...] } albo { error: "..." }
+  function parseOrders(text) {
+    var lines = text.split(/\r?\n/).filter(function (l) { return l.trim() !== ""; });
+    if (lines.length === 0) return { header: [], rows: [] };
+    var delim = detectDelimiter(lines[0]);
+    if (!delim) return { error: "Nie rozpoznano separatora w pierwszym wierszu zleceń (oczekiwany tabulator, ; lub |)." };
+    var split = function (l) { return l.split(delim).map(function (c) { return c.trim(); }); };
+    var header = split(lines[0]);
+    var rows = lines.slice(1).map(function (l) {
+      var cells = split(l);
+      while (cells.length < header.length) cells.push("");
+      return cells;
+    });
+    return { header: header, rows: rows };
+  }
+
+  function formatTable(header, rows) {
+    var widths = header.map(function (h, i) {
+      var w = h.length;
+      rows.forEach(function (r) { w = Math.max(w, (r[i] || "").length); });
+      return w;
+    });
+    var line = function (cells) {
+      return cells.map(function (c, i) { return (c || "").padEnd(widths[i]); }).join("  ").replace(/\s+$/, "");
+    };
+    var sep = widths.map(function (w) { return "-".repeat(w); }).join("  ");
+    return [line(header), sep].concat(rows.map(line)).join("\n");
+  }
+
+  function buildReport() {
+    var parsed = parseOrders(el.orders.value);
+    if (parsed.error) { say(parsed.error, true); return null; }
+
+    var notes = el.notes.value.replace(/\s+$/, "");
+    if (parsed.rows.length === 0 && notes === "") {
+      say("Wklej zlecenia lub notatki.", true);
+      return null;
+    }
+
+    var out = [];
+    out.push("ÜBERGABEBERICHT DISPOSITION");
+    out.push("Datum: " + dateDE(el.date.value) + "  |  Schicht: " + el.shift.value +
+             "  |  Disponent: " + (el.who.value.trim() || "—"));
+    out.push("=".repeat(60));
+    out.push("");
+    out.push("1. FAHRZEUGSTATUS (" + parsed.rows.length + " Aufträge)");
+    out.push("");
+    out.push(parsed.rows.length ? formatTable(parsed.header, parsed.rows) : "Keine Aufträge übergeben.");
+    out.push("");
+    out.push("2. NOTIZEN");
+    out.push("");
+    out.push(notes !== "" ? notes : "Keine Notizen.");
+    out.push("");
+    return out.join("\n");
+  }
+
+  function generate() {
+    say("");
+    var text = buildReport();
+    if (text === null) return;
+    lastReport = text;
+    el.report.textContent = text;
+    el.copy.disabled = false;
+    say("Raport gotowy.");
+  }
+
+  function copyReport() {
+    if (!lastReport) return;
+    var done = function () { say("Skopiowano do schowka."); };
+    var fallback = function () {
+      var ta = document.createElement("textarea");
+      ta.value = lastReport;
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand("copy"); done(); }
+      catch (e) { say("Nie udało się skopiować. Zaznacz tekst ręcznie.", true); }
+      document.body.removeChild(ta);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(lastReport).then(done, fallback);
+    } else {
+      fallback();
+    }
+  }
+
+  el.date.value = todayISO();
+  el.gen.addEventListener("click", generate);
+  el.copy.addEventListener("click", copyReport);
+  el.sample.addEventListener("click", function () {
+    el.orders.value = SAMPLE_ORDERS;
+    el.notes.value = SAMPLE_NOTES;
+    say("Wczytano dane przykładowe (fikcyjne).");
+  });
+  el.clear.addEventListener("click", function () {
+    el.orders.value = "";
+    el.notes.value = "";
+    el.report.textContent = "Tu pojawi się raport.";
+    lastReport = "";
+    el.copy.disabled = true;
+    say("");
+  });
+})();
+</script>
+</body>
+</html>
