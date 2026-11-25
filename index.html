@@ -93,6 +93,8 @@
     border: 1px solid var(--bd); background: var(--card); color: var(--fg);
   }
   .notes { white-space: pre-wrap; margin: 0; }
+  .open td.sache { white-space: normal; min-width: 260px; }
+  .open td.missing { color: var(--problem-fg); background: var(--problem-bg); font-style: italic; }
 </style>
 </head>
 <body>
@@ -173,7 +175,13 @@
     "Müller prosił o raport tankowania z zeszłego tygodnia, nie zrobione, chyba do środy",
     "",
     "LKW 05 beladen, wyjazd planowo 15:00, ok. nic do roboty",
-    "parking na dziedzińcu - brama zepsuta, Hausmeister wie, ale nikt nie dał terminu"
+    "parking na dziedzińcu - brama zepsuta, Hausmeister wie, ale nikt nie dał terminu",
+    "",
+    "Frau Weber (Hildesheim) wartet noch auf Rückruf wegen Lieferschein A-24812, bitte heute anrufen",
+    "czekamy na potwierdzenie slotu rozładunku w Gdańsku dla LKW 03, Nowak sprawdzi to do 20:00",
+    "Zoll-Papiere für LKW 06 fehlen noch",
+    "@Lena zadzwonić do Continental ws. rampy, jutro rano",
+    "Reklamacja Knauf noch offen, Schmidt klärt das bis Freitag"
   ].join("\n");
 
   var $ = function (id) { return document.getElementById(id); };
@@ -336,13 +344,14 @@
   function buildStatusSection(parsed) {
     var n = parsed.rows.length;
     var title = "1. FAHRZEUGSTATUS (" + n + " Aufträge)";
-    if (n === 0) return { text: title + "\n\nKeine Aufträge übergeben.", note: "", view: { title: title, empty: true } };
+    if (n === 0) return { text: title + "\n\nKeine Aufträge übergeben.", note: "", byLkw: {}, view: { title: title, empty: true } };
 
     var map = mapColumns(parsed.header);
     if (map.lkw === undefined || map.status === undefined) {
       return {
         text: title + "\n\n" + formatTable(parsed.header, parsed.rows),
         note: "Brak kolumny LKW lub Status w nagłówku. Pokazuję tabelę bez grupowania i bez opóźnień.",
+        byLkw: {},
         view: { title: title, flat: { header: parsed.header, rows: parsed.rows } }
       };
     }
@@ -384,7 +393,230 @@
       out.push(g.title + " (" + list.length + ")");
       out.push(formatTable(head, body));
     });
-    return { text: out.join("\n"), note: note, view: view };
+    var byLkw = {};
+    rows.forEach(function (r) { byLkw[normLkw(r.lkw)] = r.group; });
+    return { text: out.join("\n"), note: note, byLkw: byLkw, view: view };
+  }
+
+  // ---- Etap 3: otwarte sprawy z notatek --------------------------------------
+  var MISSING = "ergänzen";
+  var SORT_HINT = "(Sortiert: zuerst Störung, dann Verspätet, dann nach Termin)";
+  var NAME = "\\p{Lu}[\\p{L}-]*";
+
+  // Linia jest "otwarta", jeśli zawiera któreś ze słów-kluczy (PL i DE).
+  var OPEN_RE = new RegExp([
+    "(?<!\\p{L})brak", "(?<!\\p{L})czeka(?:m|my|ć)", "zadzwoni(?!ł)", "zadzwoń", "(?<!\\p{L})dzwoni(?!ł)", "oddzwo",
+    "sprawdzi[ćc]", "sprawdź", "(?<!\\p{L})trzeba", "(?<!\\p{L})ustal", "potwierdz", "jeszcze nie",
+    "nie (?:zrobion|wysłan)", "do zrobienia",
+    "(?<!\\p{L})offen", "(?<!\\p{L})wart(?:e|en|et)(?!\\p{L})", "(?<!\\p{L})(?:an|zurück|rück)ruf",
+    "(?<!\\p{L})klär", "(?<!\\p{L})fehl(?:t|en)(?!\\p{L})", "bestätig", "(?<!\\p{L})prüf", "nachfrag",
+    "muss noch", "noch nicht",
+    // usterki i brak terminu
+    "zepsut", "kaputt", "defekt", "nie dzia", "nikt nie dał", "bez terminu", "kein(?:en)? termin"
+  ].join("|"), "iu");
+
+  // Osoba: kolejność = od najpewniejszego wzorca; kontakt po stronie klienta (Herr/Frau) oznaczamy osobno.
+  var VERBS = "zadzwoni|zadzwoń|oddzwoni|sprawdzi|wyśle|zajmie|zrobi|potwierdzi|prosił[a]?|ruft|prüft|klärt|kümmert|meldet|schickt";
+  var PERSON_RES = [
+    { re: new RegExp("@(" + NAME + ")", "u"), contact: false },
+    { re: new RegExp("(?<!\\p{L})(" + NAME + ")\\s+(?:" + VERBS + ")", "u"), contact: false },
+    { re: new RegExp("(?:→|->|decyzja|Entscheidung|zuständig|odpowiada|Verantwortlich\\p{L}*)[:\\s]+(" + NAME + ")", "iu"), contact: false },
+    { re: new RegExp("\\(\\s*(" + NAME + ")\\s+(?:z|aus|von)\\s", "u"), contact: false },
+    { re: new RegExp("((?:Herr|Frau|Hr\\.|Fr\\.|Pan|Pani)\\s+" + NAME + ")", "u"), contact: true },
+    // rola zamiast imienia (najniższy priorytet)
+    { re: new RegExp("(?<!\\p{L})(Hausmeister|Werkstatt|Buchhaltung|Spedition)(?!\\p{L})", "u"), contact: false }
+  ];
+
+  var WEEKDAYS = [
+    ["poniedział", "Montag"], ["wtor", "Dienstag"], ["środ", "Mittwoch"], ["czwart", "Donnerstag"],
+    ["piąt", "Freitag"], ["sobot", "Samstag"], ["niedziel", "Sonntag"],
+    ["montag", "Montag"], ["dienstag", "Dienstag"], ["mittwoch", "Mittwoch"], ["donnerstag", "Donnerstag"],
+    ["freitag", "Freitag"], ["samstag", "Samstag"], ["sonntag", "Sonntag"]
+  ];
+  var REL_MAP = { jutro: "morgen", morgen: "morgen", "dziś": "heute", dzisiaj: "heute", heute: "heute",
+                  pojutrze: "übermorgen", "übermorgen": "übermorgen" };
+  var QUAL_MAP = { rano: "früh", "früh": "früh", wieczorem: "abends", abends: "abends",
+                   vormittags: "vormittags", nachmittags: "nachmittags", "po południu": "nachmittags" };
+  var REL_RE = /(?<!\p{L})(jutro|morgen|dziś|dzisiaj|heute|pojutrze|übermorgen)(?!\p{L})(?:\s+(rano|früh|wieczorem|abends|vormittags|nachmittags|po południu))?/iu;
+  var WD_RE = /(?<!\p{L})(?:do|bis|am|na|spätestens|najpóźniej|vor)\s+(poniedział\p{L}*|wtor\p{L}*|środ\p{L}*|czwart\p{L}*|piąt\p{L}*|sobot\p{L}*|niedziel\p{L}*|montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag)(?!\p{L})/iu;
+  var DATE_RE = /(?<![\d.])(\d{1,2})\.(\d{1,2})\.(\d{4}|\d{2})?(?!\d)/;
+  var TIME_A = /(?<!\p{L})(?:bis|do|spätestens|najpóźniej|vor)\s+(\d{1,2})[:.](\d{2})(?!\d)/iu;
+  var TIME_B = /(?<!\p{L})(?:bis|do|spätestens|najpóźniej|vor)\s+(\d{1,2})\s*(?:Uhr|godz\.?)/iu;
+  var UNSURE_RE = /chyba|prawdopodobnie|vermutlich|wahrscheinlich/i;
+
+  function pad2(n) { n = String(n); return n.length < 2 ? "0" + n : n; }
+
+  function normLkw(s) {
+    var m = /^\s*LKW\s*0*(\d+)\s*$/i.exec(s || "");
+    return m ? "LKW " + pad2(m[1]) : (s || "").trim();
+  }
+
+  function weekdayDE(word) {
+    var w = word.toLowerCase();
+    for (var i = 0; i < WEEKDAYS.length; i++) if (w.indexOf(WEEKDAYS[i][0]) === 0) return WEEKDAYS[i][1];
+    return null;
+  }
+
+  function extractPerson(line) {
+    for (var i = 0; i < PERSON_RES.length; i++) {
+      var m = PERSON_RES[i].re.exec(line);
+      if (m) return PERSON_RES[i].contact ? m[1] + " (Kontakt)" : m[1];
+    }
+    return "";
+  }
+
+  var WEEKDAY_NUM = { Montag: 1, Dienstag: 2, Mittwoch: 3, Donnerstag: 4, Freitag: 5, Samstag: 6, Sonntag: 0 };
+  var QUAL_MIN = { "früh": 480, vormittags: 660, nachmittags: 900, abends: 1080 };
+
+  // Data odniesienia = pole "Datum" w formularzu (do sortowania terminów)
+  function refDate() {
+    var p = (el.date.value || "").split("-");
+    var d = p.length === 3 ? new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2])) : new Date();
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }
+
+  // Zwraca { text, key }: text do wyświetlenia, key = liczba do sortowania (Infinity = brak terminu)
+  function extractTermin(line, ref) {
+    var dayPart = "", timePart = "", offset = 0, qualMin = null, minutes = null, m;
+    if ((m = REL_RE.exec(line))) {
+      var rel = REL_MAP[m[1].toLowerCase()];
+      dayPart = rel;
+      offset = rel === "heute" ? 0 : rel === "morgen" ? 1 : 2;
+      if (m[2]) {
+        var q = QUAL_MAP[m[2].toLowerCase()];
+        dayPart += " " + q;
+        qualMin = QUAL_MIN[q];
+      }
+    }
+    if (!dayPart && (m = WD_RE.exec(line))) {
+      var wd = weekdayDE(m[1]);
+      if (wd) {
+        dayPart = "bis " + wd;
+        offset = (WEEKDAY_NUM[wd] - ref.getDay() + 7) % 7;
+      }
+    }
+    if (!dayPart && (m = DATE_RE.exec(line)) && Number(m[1]) <= 31 && Number(m[2]) >= 1 && Number(m[2]) <= 12) {
+      dayPart = pad2(m[1]) + "." + pad2(m[2]) + "." + (m[3] || "");
+      var yr = m[3] ? (m[3].length === 2 ? 2000 + Number(m[3]) : Number(m[3])) : ref.getFullYear();
+      offset = Math.round((new Date(yr, Number(m[2]) - 1, Number(m[1])) - ref) / 86400000);
+    }
+    if ((m = TIME_A.exec(line) || TIME_B.exec(line)) && Number(m[1]) <= 23 && (m[2] === undefined || Number(m[2]) <= 59)) {
+      timePart = pad2(m[1]) + ":" + (m[2] || "00");
+      minutes = Number(m[1]) * 60 + Number(m[2] || 0);
+    }
+    var out;
+    if (dayPart && timePart) out = dayPart.indexOf("bis ") === 0 ? dayPart + ", " + timePart : dayPart + ", bis " + timePart;
+    else if (timePart) out = "bis " + timePart;
+    else out = dayPart;
+    if (!out) return { text: "", key: Infinity };
+    var key = offset * 1440 + (minutes !== null ? minutes : qualMin !== null ? qualMin : 1439);
+    return { text: UNSURE_RE.test(line) ? out + " (unsicher)" : out, key: key };
+  }
+
+  function extractRefs(line, idx) {
+    var lkws = [], auftraege = [], m;
+    var reL = /(?<!\p{L})LKW\s*0*(\d{1,3})(?!\d)/giu;
+    while ((m = reL.exec(line))) {
+      var l = "LKW " + pad2(m[1]);
+      if (lkws.indexOf(l) === -1) lkws.push(l);
+    }
+    var reA = /(?<![\p{L}\d])A-\d{4,6}(?!\d)/giu;
+    while ((m = reA.exec(line))) {
+      var a = m[0].toUpperCase();
+      if (auftraege.indexOf(a) === -1) auftraege.push(a);
+      var viaOrder = idx[a];
+      if (viaOrder && lkws.indexOf(viaOrder) === -1) lkws.push(viaOrder);
+    }
+    return { lkws: lkws, auftraege: auftraege };
+  }
+
+  function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+  function nameRe(s) { return new RegExp("(?<![\\p{L}\\d])" + escapeRe(s) + "(?![\\p{L}\\d])", "iu"); }
+
+  // Indeks z listy zleceń: Auftrag -> LKW oraz klienci (przypisanie LKW po nazwie klienta).
+  function ordersIndex(parsed) {
+    var idx = { byAuftrag: {}, customers: [] };
+    var map = mapColumns(parsed.header);
+    if (map.lkw === undefined) return idx;
+    parsed.rows.forEach(function (r) {
+      var lkw = normLkw(r[map.lkw]);
+      var auftrag = map.auftrag === undefined ? "" : (r[map.auftrag] || "").toUpperCase();
+      if (auftrag) idx.byAuftrag[auftrag] = lkw;
+      var name = map.kunde === undefined ? "" : (r[map.kunde] || "").trim();
+      if (name) idx.customers.push({ name: name, lkw: lkw, auftrag: auftrag, re: nameRe(name), firstRe: null });
+    });
+    // Skrót = pierwsze słowo nazwy (min. 4 litery), tylko jeśli jednoznaczne wśród klientów
+    var seen = {};
+    idx.customers.forEach(function (c) {
+      var k = c.name.split(/\s+/)[0].toLowerCase();
+      (seen[k] = seen[k] || {})[c.name.toLowerCase()] = true;
+    });
+    idx.customers.forEach(function (c) {
+      var fw = c.name.split(/\s+/)[0];
+      if (fw.length >= 4 && fw !== c.name && Object.keys(seen[fw.toLowerCase()]).length === 1) c.firstRe = nameRe(fw);
+    });
+    return idx;
+  }
+
+  function customerMatches(line, customers) {
+    var hits = customers.filter(function (c) { return c.re.test(line); });
+    if (!hits.length) hits = customers.filter(function (c) { return c.firstRe && c.firstRe.test(line); });
+    return hits;
+  }
+
+  // 0 = Störung, 1 = Verspätet, 2 = reszta
+  function rankOf(lkws, statusByLkw) {
+    var rank = 2;
+    lkws.forEach(function (l) {
+      var g = statusByLkw[l];
+      if (g === "problem") rank = Math.min(rank, 0);
+      else if (g === "delayed") rank = Math.min(rank, 1);
+    });
+    return rank;
+  }
+
+  // Zwraca { items (posortowane), rest (linie bez otwartej sprawy) }
+  function extractOpenItems(notes, idx, statusByLkw, ref) {
+    var items = [], rest = [];
+    notes.split(/\r?\n/).forEach(function (raw, order) {
+      var trimmed = raw.trim();
+      if (!trimmed) return;
+      var line = trimmed.replace(/^[-*•–]+\s*/, "");
+      if (!OPEN_RE.test(line)) { rest.push(trimmed); return; }
+      var person = extractPerson(line), t = extractTermin(line, ref);
+      var refs = extractRefs(line, idx.byAuftrag), viaCustomer = false;
+      if (!refs.lkws.length && !refs.auftraege.length) {
+        customerMatches(line, idx.customers).forEach(function (c) {
+          viaCustomer = true;
+          if (c.lkw && refs.lkws.indexOf(c.lkw) === -1) refs.lkws.push(c.lkw);
+          if (c.auftrag && refs.auftraege.indexOf(c.auftrag) === -1) refs.auftraege.push(c.auftrag);
+        });
+      }
+      var lkwText = refs.lkws.concat(refs.auftraege).join(" · ");
+      items.push({
+        sache: line,
+        person: person || MISSING,
+        termin: t.text || MISSING,
+        lkw: lkwText ? lkwText + (viaCustomer ? " (Kunde)" : "") : "—",
+        pMissing: !person,
+        tMissing: !t.text,
+        rank: rankOf(refs.lkws, statusByLkw || {}),
+        key: t.key,
+        order: order
+      });
+    });
+    items.sort(function (a, b) {
+      return (a.rank - b.rank) || (a.key === b.key ? 0 : a.key < b.key ? -1 : 1) || (a.order - b.order);
+    });
+    return { items: items, rest: rest };
+  }
+
+  function itemsText(items) {
+    if (!items.length) return "Keine offenen Punkte erkannt.";
+    return items.map(function (it, i) {
+      return (i + 1) + ". " + it.sache + "\n   Person: " + it.person + " | Termin: " + it.termin + " | LKW: " + it.lkw;
+    }).join("\n");
   }
 
   var lastNote = "";
@@ -444,7 +676,30 @@
         root.appendChild(sec);
       });
     }
-    root.appendChild(h("h3", "", "2. NOTIZEN"));
+    root.appendChild(h("h3", "", "2. OFFENE PUNKTE (" + v.items.length + ")"));
+    if (v.items.length) root.appendChild(h("p", "hint", SORT_HINT));
+    if (!v.items.length) {
+      root.appendChild(h("p", "", "Keine offenen Punkte erkannt."));
+    } else {
+      var wrap = h("div", "tablewrap");
+      var table = h("table", "open");
+      var hr = h("tr");
+      ["Sache", "Person", "Termin", "LKW"].forEach(function (c) { hr.appendChild(h("th", "", c)); });
+      table.appendChild(h("thead")).appendChild(hr);
+      var tb = h("tbody");
+      v.items.forEach(function (it) {
+        var tr = h("tr");
+        tr.appendChild(h("td", "sache", it.sache));
+        tr.appendChild(h("td", it.pMissing ? "missing" : "", it.person));
+        tr.appendChild(h("td", it.tMissing ? "missing" : "", it.termin));
+        tr.appendChild(h("td", "", it.lkw));
+        tb.appendChild(tr);
+      });
+      table.appendChild(tb);
+      wrap.appendChild(table);
+      root.appendChild(wrap);
+    }
+    root.appendChild(h("h3", "", "3. SONSTIGE NOTIZEN"));
     root.appendChild(h("p", "notes", v.notes));
   }
 
@@ -467,12 +722,20 @@
     out.push("");
     var status = buildStatusSection(parsed);
     lastNote = status.note;
-    lastView = { meta: meta, status: status.view, notes: notes !== "" ? notes : "Keine Notizen." };
+    var found = extractOpenItems(notes, ordersIndex(parsed), status.byLkw, refDate());
+    var items = found.items;
+    var restText = found.rest.length ? found.rest.join("\n") : "Keine sonstigen Notizen.";
+    lastView = { meta: meta, status: status.view, items: items, notes: restText };
     out.push(status.text);
     out.push("");
-    out.push("2. NOTIZEN");
+    out.push("2. OFFENE PUNKTE (" + items.length + ")");
+    if (items.length) out.push(SORT_HINT);
     out.push("");
-    out.push(notes !== "" ? notes : "Keine Notizen.");
+    out.push(itemsText(items));
+    out.push("");
+    out.push("3. SONSTIGE NOTIZEN");
+    out.push("");
+    out.push(restText);
     out.push("");
     return out.join("\n");
   }
