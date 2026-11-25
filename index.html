@@ -46,11 +46,53 @@
   button:disabled { opacity: .5; cursor: default; }
   #msg { color: var(--muted); font-size: .9rem; }
   #msg.err { color: #c0392b; }
-  pre#report {
-    margin: 0; padding: 12px; overflow-x: auto; white-space: pre;
-    background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
-    font: .85rem/1.4 ui-monospace, Consolas, monospace;
+  /* Kolory statusów: czerwony = opóźniony, żółty = problem, niebieski = w trasie, zielony = zrealizowany */
+  :root {
+    --delayed-bg: #fde8e8; --delayed-fg: #9b1c1c; --delayed-bd: #e02424;
+    --problem-bg: #fef3c7; --problem-fg: #92400e; --problem-bd: #d97706;
+    --moving-bg:  #e1effe; --moving-fg:  #1e429f; --moving-bd:  #3f83f8;
+    --done-bg:    #def7ec; --done-fg:    #03543f; --done-bd:    #0e9f6e;
+    --check-bg:   #eceff3; --check-fg:   #374151; --check-bd:   #9ca3af;
   }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --delayed-bg: #3b1d1d; --delayed-fg: #fca5a5; --delayed-bd: #f87171;
+      --problem-bg: #3a2f10; --problem-fg: #fcd34d; --problem-bd: #fbbf24;
+      --moving-bg:  #172a4a; --moving-fg:  #93c5fd; --moving-bd:  #60a5fa;
+      --done-bg:    #12342a; --done-fg:    #6ee7b7; --done-bd:    #34d399;
+      --check-bg:   #2a303b; --check-fg:   #cbd5e1; --check-bd:   #6b7280;
+    }
+  }
+  .t-delayed { --bg: var(--delayed-bg); --fg: var(--delayed-fg); --bd: var(--delayed-bd); }
+  .t-problem { --bg: var(--problem-bg); --fg: var(--problem-fg); --bd: var(--problem-bd); }
+  .t-moving  { --bg: var(--moving-bg);  --fg: var(--moving-fg);  --bd: var(--moving-bd); }
+  .t-done    { --bg: var(--done-bg);    --fg: var(--done-fg);    --bd: var(--done-bd); }
+  .t-check   { --bg: var(--check-bg);   --fg: var(--check-fg);   --bd: var(--check-bd); }
+
+  .report h2 { font-size: 1.2rem; margin: 0 0 2px; }
+  .report h3 { font-size: 1rem; margin: 18px 0 8px; padding-top: 10px; border-top: 1px solid var(--line); }
+  .report .meta { color: var(--muted); margin: 0; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 6px; }
+  .chip {
+    padding: 3px 10px; border-radius: 999px; font-weight: 600; font-size: .85rem;
+    background: var(--bg); color: var(--fg); border: 1px solid var(--bd);
+  }
+  .hint { color: var(--muted); font-size: .85rem; margin: 2px 0 0; }
+  .group { margin-top: 14px; }
+  .group h4 {
+    margin: 0 0 6px; padding: 4px 10px; font-size: .9rem; border-radius: 6px;
+    background: var(--bg); color: var(--fg); border-left: 5px solid var(--bd);
+  }
+  .tablewrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: .88rem; }
+  th, td { text-align: left; padding: 6px 10px; white-space: nowrap; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 600; font-size: .8rem; }
+  .group tbody tr { background: var(--bg); color: var(--fg); }
+  .badge {
+    display: inline-block; padding: 1px 9px; border-radius: 999px; font-weight: 600;
+    border: 1px solid var(--bd); background: var(--card); color: var(--fg);
+  }
+  .notes { white-space: pre-wrap; margin: 0; }
 </style>
 </head>
 <body>
@@ -95,7 +137,7 @@
       <strong>Raport</strong>
       <button id="copy" disabled>Kopiuj raport</button>
     </div>
-    <pre id="report">Tu pojawi się raport.</pre>
+    <div id="report" class="report">Tu pojawi się raport.</div>
   </section>
 </main>
 
@@ -198,6 +240,214 @@
     return [line(header), sep].concat(rows.map(line)).join("\n");
   }
 
+  // ---- Etap 2: statusy i opóźnienia ----------------------------------------
+  var DELAY_LIMIT = 15; // minuty; od tej wartości pojazd liczy się jako verspätet
+
+  var COLUMN_ALIASES = {
+    lkw: ["lkw", "fahrzeug", "pojazd", "truck"],
+    kennzeichen: ["kennzeichen", "rejestracja", "nr rej"],
+    auftrag: ["auftrag", "zlecenie"],
+    kunde: ["kunde", "klient"],
+    route: ["route", "trasa"],
+    plan: ["plan", "soll", "planowo"],
+    eta: ["eta", "ist", "prognoza"],
+    status: ["status"]
+  };
+  var FIELD_ORDER = ["lkw", "kennzeichen", "auftrag", "kunde", "route", "plan", "eta", "delay", "status"];
+  var FIELD_LABEL = {
+    lkw: "LKW", kennzeichen: "Kennzeichen", auftrag: "Auftrag", kunde: "Kunde",
+    route: "Route", plan: "Plan", eta: "ETA", delay: "Verspätung", status: "Status", hint: "Hinweis"
+  };
+  var GROUPS = [
+    { id: "problem", title: "STÖRUNG / PROBLEM", short: "Störung" },
+    { id: "delayed", title: "VERSPÄTET", short: "Verspätet" },
+    { id: "moving",  title: "UNTERWEGS / IN BEARBEITUNG", short: "Unterwegs" },
+    { id: "done",    title: "ERLEDIGT", short: "Erledigt" },
+    { id: "check",   title: "ZU PRÜFEN", short: "Zu prüfen" }
+  ];
+
+  function mapColumns(header) {
+    var map = {};
+    header.forEach(function (h, i) {
+      var key = h.toLowerCase().replace(/[^a-zäöüßąćęłńóśźż0-9 ]/g, "").trim();
+      Object.keys(COLUMN_ALIASES).forEach(function (f) {
+        if (map[f] === undefined && COLUMN_ALIASES[f].indexOf(key) !== -1) map[f] = i;
+      });
+    });
+    return map;
+  }
+
+  // "8:05", "08:05", "8.05" -> minuty od północy; inaczej null
+  function parseTime(s) {
+    var m = /^(\d{1,2})[:.](\d{2})$/.exec((s || "").trim());
+    if (!m) return null;
+    var h = Number(m[1]), mi = Number(m[2]);
+    return (h > 23 || mi > 59) ? null : h * 60 + mi;
+  }
+
+  // ETA przed planem o więcej niż 12 h = przejście przez północ
+  function delayMinutes(plan, eta) {
+    var d = eta - plan;
+    return d < -720 ? d + 1440 : d;
+  }
+
+  function classifyStatus(s) {
+    var t = (s || "").toLowerCase();
+    if (/panne|störung|stoerung|unfall|schaden|awari|problem|wypadek/.test(t)) return "problem";
+    if (/erledigt|zugestellt|abgeschlossen|geliefert|zrealizow|dostarczon/.test(t)) return "done";
+    if (/verspät|verspaet|opóźn|opozn|stau|zoll/.test(t)) return "delayed";
+    if (/unterwegs|laden|w trasie|załad|zalad|rozład|rozlad/.test(t)) return "moving";
+    return null;
+  }
+
+  function fmtDelay(d, group) {
+    if (d === null) return group === "delayed" ? "?" : "";
+    if (d < 1) return "";
+    if (d < 60) return "+" + d + " Min";
+    return "+" + Math.floor(d / 60) + " h " + String(d % 60).padStart(2, "0") + " Min";
+  }
+
+  function classifyRow(cells, map) {
+    var get = function (f) { return map[f] === undefined ? "" : (cells[map[f]] || ""); };
+    var planRaw = get("plan"), etaRaw = get("eta");
+    var plan = planRaw === "" ? null : parseTime(planRaw);
+    var eta = etaRaw === "" ? null : parseTime(etaRaw);
+    var cat = classifyStatus(get("status"));
+    var reasons = [];
+    if (planRaw !== "" && plan === null) reasons.push("Plan nicht lesbar: " + planRaw);
+    if (etaRaw !== "" && eta === null) reasons.push("ETA nicht lesbar: " + etaRaw);
+    if (cat === null) reasons.push("Status unbekannt: " + (get("status") || "leer"));
+    var delay = (plan !== null && eta !== null) ? delayMinutes(plan, eta) : null;
+
+    var group;
+    if (reasons.length) group = "check";
+    else if (cat === "problem") group = "problem";
+    else if (cat === "done") group = "done";
+    else if (cat === "delayed" || (delay !== null && delay >= DELAY_LIMIT)) group = "delayed";
+    else group = "moving";
+
+    var row = { group: group, delay: delay, hint: reasons.join("; ") };
+    FIELD_ORDER.forEach(function (f) {
+      row[f] = f === "delay" ? fmtDelay(delay, group) : get(f);
+    });
+    return row;
+  }
+
+  function buildStatusSection(parsed) {
+    var n = parsed.rows.length;
+    var title = "1. FAHRZEUGSTATUS (" + n + " Aufträge)";
+    if (n === 0) return { text: title + "\n\nKeine Aufträge übergeben.", note: "", view: { title: title, empty: true } };
+
+    var map = mapColumns(parsed.header);
+    if (map.lkw === undefined || map.status === undefined) {
+      return {
+        text: title + "\n\n" + formatTable(parsed.header, parsed.rows),
+        note: "Brak kolumny LKW lub Status w nagłówku. Pokazuję tabelę bez grupowania i bez opóźnień.",
+        view: { title: title, flat: { header: parsed.header, rows: parsed.rows } }
+      };
+    }
+
+    var rows = parsed.rows.map(function (r) { return classifyRow(r, map); });
+    var note = "";
+    if (map.plan === undefined || map.eta === undefined) {
+      note = "Brak kolumny Plan lub ETA. Opóźnienia wyliczane tylko ze statusu.";
+    }
+
+    var counts = {};
+    GROUPS.forEach(function (g) { counts[g.id] = 0; });
+    rows.forEach(function (r) { counts[r.group]++; });
+    var delays = rows.map(function (r) { return r.delay; }).filter(function (d) { return d !== null && d >= DELAY_LIMIT; });
+
+    var view = { title: title, chips: [], maxDelay: "", limit: "(Verspätet ab " + DELAY_LIMIT + " Min. ETA nach Plan)", groups: [] };
+    GROUPS.forEach(function (g) { view.chips.push({ id: g.id, text: g.short + " " + counts[g.id] }); });
+    if (delays.length) view.maxDelay = "Größte Verspätung: " + fmtDelay(Math.max.apply(null, delays), "delayed");
+
+    var out = [title, ""];
+    out.push("Übersicht: " + GROUPS.map(function (g) { return g.short + " " + counts[g.id]; }).join("  |  "));
+    if (view.maxDelay) out.push(view.maxDelay);
+    out.push(view.limit);
+
+    GROUPS.forEach(function (g) {
+      var list = rows.filter(function (r) { return r.group === g.id; });
+      if (!list.length) return;
+      if (g.id === "delayed") {
+        list.sort(function (a, b) { return (b.delay === null ? -1 : b.delay) - (a.delay === null ? -1 : a.delay); });
+      }
+      var fields = FIELD_ORDER.filter(function (f) {
+        return f === "delay" ? g.id === "delayed" : map[f] !== undefined;
+      });
+      if (g.id === "check") fields.push("hint");
+      var head = fields.map(function (f) { return FIELD_LABEL[f]; });
+      var body = list.map(function (r) { return fields.map(function (f) { return r[f]; }); });
+      view.groups.push({ id: g.id, title: g.title + " (" + list.length + ")", header: head, rows: body });
+      out.push("");
+      out.push(g.title + " (" + list.length + ")");
+      out.push(formatTable(head, body));
+    });
+    return { text: out.join("\n"), note: note, view: view };
+  }
+
+  var lastNote = "";
+  var lastView = null;
+
+  // ---- Widok na ekranie (kolorowy HTML); do schowka idzie wersja tekstowa ----
+  function h(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+
+  function renderTable(header, rows, badgeCol) {
+    var wrap = h("div", "tablewrap");
+    var table = h("table");
+    var tr = h("tr");
+    header.forEach(function (c) { tr.appendChild(h("th", "", c)); });
+    table.appendChild(h("thead")).appendChild(tr);
+    var tbody = h("tbody");
+    rows.forEach(function (r) {
+      var row = h("tr");
+      r.forEach(function (c, i) {
+        var td = h("td");
+        if (i === badgeCol && c) td.appendChild(h("span", "badge", c));
+        else td.textContent = c;
+        row.appendChild(td);
+      });
+      tbody.appendChild(row);
+    });
+    table.appendChild(tbody);
+    wrap.appendChild(table);
+    return wrap;
+  }
+
+  function renderReport(v) {
+    var root = el.report;
+    root.textContent = "";
+    root.appendChild(h("h2", "", "ÜBERGABEBERICHT DISPOSITION"));
+    root.appendChild(h("p", "meta", v.meta));
+    root.appendChild(h("h3", "", v.status.title));
+    var s = v.status;
+    if (s.empty) {
+      root.appendChild(h("p", "", "Keine Aufträge übergeben."));
+    } else if (s.flat) {
+      root.appendChild(renderTable(s.flat.header, s.flat.rows, -1));
+    } else {
+      var chips = h("div", "chips");
+      s.chips.forEach(function (c) { chips.appendChild(h("span", "chip t-" + c.id, c.text)); });
+      root.appendChild(chips);
+      if (s.maxDelay) root.appendChild(h("p", "hint", s.maxDelay));
+      root.appendChild(h("p", "hint", s.limit));
+      s.groups.forEach(function (g) {
+        var sec = h("div", "group t-" + g.id);
+        sec.appendChild(h("h4", "", g.title));
+        sec.appendChild(renderTable(g.header, g.rows, g.header.indexOf("Status")));
+        root.appendChild(sec);
+      });
+    }
+    root.appendChild(h("h3", "", "2. NOTIZEN"));
+    root.appendChild(h("p", "notes", v.notes));
+  }
+
   function buildReport() {
     var parsed = parseOrders(el.orders.value);
     if (parsed.error) { say(parsed.error, true); return null; }
@@ -210,13 +460,15 @@
 
     var out = [];
     out.push("ÜBERGABEBERICHT DISPOSITION");
-    out.push("Datum: " + dateDE(el.date.value) + "  |  Schicht: " + el.shift.value +
-             "  |  Disponent: " + (el.who.value.trim() || "—"));
+    var meta = "Datum: " + dateDE(el.date.value) + "  |  Schicht: " + el.shift.value +
+               "  |  Disponent: " + (el.who.value.trim() || "—");
+    out.push(meta);
     out.push("=".repeat(60));
     out.push("");
-    out.push("1. FAHRZEUGSTATUS (" + parsed.rows.length + " Aufträge)");
-    out.push("");
-    out.push(parsed.rows.length ? formatTable(parsed.header, parsed.rows) : "Keine Aufträge übergeben.");
+    var status = buildStatusSection(parsed);
+    lastNote = status.note;
+    lastView = { meta: meta, status: status.view, notes: notes !== "" ? notes : "Keine Notizen." };
+    out.push(status.text);
     out.push("");
     out.push("2. NOTIZEN");
     out.push("");
@@ -230,9 +482,9 @@
     var text = buildReport();
     if (text === null) return;
     lastReport = text;
-    el.report.textContent = text;
+    renderReport(lastView);
     el.copy.disabled = false;
-    say("Raport gotowy.");
+    say(lastNote ? "Raport gotowy. " + lastNote : "Raport gotowy.");
   }
 
   function copyReport() {
