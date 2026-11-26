@@ -111,6 +111,65 @@
     border: 2px solid var(--delayed-bd); box-shadow: 0 6px 24px rgba(0,0,0,.35);
   }
   [hidden] { display: none !important; }
+  .print-only, .print-val { display: none; }
+
+  /* ---- Druk / PDF: A4, czarno-biały, tylko raport ---- */
+  @page { size: A4 portrait; margin: 12mm; }
+  @media print {
+    :root {
+      --bg: #fff; --card: #fff; --text: #000; --muted: #000; --line: #999;
+      --delayed-bg: #fff; --delayed-fg: #000; --delayed-bd: #000;
+      --problem-bg: #fff; --problem-fg: #000; --problem-bd: #000;
+      --moving-bg:  #fff; --moving-fg:  #000; --moving-bd:  #000;
+      --done-bg:    #fff; --done-fg:    #000; --done-bd:    #000;
+      --check-bg:   #fff; --check-fg:   #000; --check-bd:   #000;
+    }
+    body { padding: 0; background: #fff; color: #000; font-size: 9.5pt; }
+    main { max-width: none; }
+    main > *:not(#reportCard), #reportCard > .actions, #confirm, button, .noprint { display: none !important; }
+    #reportCard { border: 0; padding: 0; margin: 0; border-radius: 0; }
+    .print-only { display: block; }
+    .print-val { display: inline; }
+    .report input { display: none; }
+
+    .report h2 { font-size: 14pt; }
+    .report h3 { font-size: 11pt; margin: 10px 0 5px; padding-top: 6px; border-top: 1.5px solid #000; }
+    .report h3, .group h4 { break-after: avoid; }
+    .tablewrap { overflow: visible; }
+    table { font-size: 8.5pt; }
+    th, td, .open td.sache { white-space: normal; min-width: 0; padding: 2px 4px; vertical-align: top; border-bottom: 1px solid #999; }
+    th { border-bottom: 1.5px solid #000; }
+    thead { display: table-header-group; }
+    tr { break-inside: avoid; }
+    .open th:first-child { width: 52%; }
+    .notes { font-size: 9pt; }
+    .chip, .badge, .tag { background: #fff; color: #000; border: 1px solid #000; }
+    .badge { padding: 0 4px; }
+
+    /* Statusy bez kolorów: znacznik + grubość i styl ramki */
+    .group h4 { background: #fff; color: #000; border: 1px solid #000; border-left-width: 6px; border-radius: 0; font-size: 9.5pt; }
+    .t-problem h4 { border: 3px solid #000; border-left-width: 10px; }
+    .t-delayed h4 { border: 2px dashed #000; border-left: 8px solid #000; }
+    .t-done h4    { border-style: solid; border-left-width: 2px; }
+    .t-check h4   { border-style: dotted; }
+    .group.t-problem tbody tr, .group.t-delayed tbody tr { font-weight: 700; }
+    .t-problem .badge, .chip.t-problem { border-width: 2.5px; }
+    .t-delayed .badge, .chip.t-delayed { border-style: dashed; border-width: 1.5px; }
+    .t-check .badge, .chip.t-check { border-style: dotted; }
+    .t-problem h4::before, .t-problem .badge::before, .chip.t-problem::before { content: "■ "; }
+    .t-delayed h4::before, .t-delayed .badge::before, .chip.t-delayed::before { content: "▲ "; }
+    .t-moving h4::before,  .t-moving .badge::before,  .chip.t-moving::before  { content: "► "; }
+    .t-done h4::before,    .t-done .badge::before,    .chip.t-done::before    { content: "✓ "; }
+    .t-check h4::before,   .t-check .badge::before,   .chip.t-check::before   { content: "? "; }
+
+    .open tr.r0, .open tr.r1 { font-weight: 700; }
+    .open tr.r0 td.sache::before { content: "■ "; }
+    .open tr.r1 td.sache::before { content: "▲ "; }
+    .open td.missing { background: #fff; }
+    .open td.missing .print-val { font-style: italic; font-weight: 700; }
+    .open td.missing .print-val::before { content: "[ "; }
+    .open td.missing .print-val::after { content: " ]"; }
+  }
 </style>
 </head>
 <body>
@@ -152,10 +211,11 @@
     <span id="saveState"></span>
   </section>
 
-  <section class="card">
+  <section class="card" id="reportCard">
     <div class="actions" style="margin-bottom:10px">
       <strong>Raport</strong>
       <button id="copy" disabled>Kopiuj raport</button>
+      <button id="print" disabled>Drukuj / PDF</button>
       <button id="carry" disabled>Przenieś otwarte sprawy na następną zmianę</button>
     </div>
     <div id="report" class="report">Tu pojawi się raport.</div>
@@ -220,7 +280,7 @@
     orders: $("orders"), notes: $("notes"),
     gen: $("gen"), sample: $("sample"), clear: $("clear"),
     copy: $("copy"), report: $("report"), msg: $("msg"),
-    carry: $("carry"), wipe: $("wipe"), saveState: $("saveState"), history: $("history"),
+    print: $("print"), carry: $("carry"), wipe: $("wipe"), saveState: $("saveState"), history: $("history"),
     confirm: $("confirm"), confirmText: $("confirmText"), confirmYes: $("confirmYes"), confirmNo: $("confirmNo")
   };
 
@@ -853,8 +913,10 @@
     input.setAttribute("aria-label", label);
     input.setAttribute("data-id", item.id);
     input.setAttribute("data-field", field);
+    var printVal = h("span", "print-val"); // do druku: pełny tekst zamiast pola
     var paint = function () {
       if (markMissing) td.className = item[field] ? (cls || "") : ((cls || "") + " missing").trim();
+      printVal.textContent = item[field] || (markMissing ? MISSING : "—");
     };
     paint();
     input.addEventListener("input", function () {
@@ -869,9 +931,14 @@
         draft.manual.edits[item.id] = e;
       }
       paint();
+      if (field === "sache") {
+        input.parentNode.parentNode.className = rowClass(item);
+        openTitle.textContent = openHeading();
+      }
       persist();
     });
     td.appendChild(input);
+    td.appendChild(printVal);
     return td;
   }
 
@@ -912,30 +979,37 @@
     return b;
   }
 
+  var openTitle = null;
+
+  function openHeading() { return "2. OFFENE PUNKTE (" + filledItems().length + ")"; }
+
+  // Puste (jeszcze niewypełnione) punkty nie trafiają na wydruk
+  function rowClass(item) { return item.sache.trim() ? "r" + item.rank : "noprint"; }
+
   function renderOpen() {
     var root = openEl;
     root.textContent = "";
-    root.appendChild(h("h3", "", "2. OFFENE PUNKTE (" + model.items.length + ")"));
+    openTitle = root.appendChild(h("h3", "", openHeading()));
     if (!model.items.length) {
       root.appendChild(h("p", "", "Keine offenen Punkte erkannt."));
     } else {
       root.appendChild(h("p", "hint", SORT_HINT));
-      root.appendChild(h("p", "hint", "Person i Termin możesz poprawiać. Kolejność odświeża się po „Generuj”."));
+      root.appendChild(h("p", "hint noprint", "Person i Termin możesz poprawiać. Kolejność odświeża się po „Generuj”."));
       var wrap = h("div", "tablewrap");
       var table = h("table", "open");
       var hr = h("tr");
-      ["Sache", "Person", "Termin", "LKW", ""].forEach(function (c) { hr.appendChild(h("th", "", c)); });
+      ["Sache", "Person", "Termin", "LKW", ""].forEach(function (c) { hr.appendChild(h("th", c ? "" : "noprint", c)); });
       table.appendChild(h("thead")).appendChild(hr);
       var tb = h("tbody");
       model.items.forEach(function (it) {
-        var tr = h("tr");
+        var tr = h("tr", rowClass(it));
         var sache = it.isManual ? editCell(it, "sache", "Sache", "sache") : h("td", "sache", it.sache);
         if (it.from) sache.appendChild(h("span", "tag", "übernommen: " + it.from));
         tr.appendChild(sache);
         tr.appendChild(editCell(it, "person", "Person"));
         tr.appendChild(editCell(it, "termin", "Termin"));
         tr.appendChild(it.isManual ? editCell(it, "lkw", "LKW") : h("td", "", it.lkw || "—"));
-        var action = h("td");
+        var action = h("td", "noprint");
         action.appendChild(button("usuń", function () { removeItem(it); }));
         tr.appendChild(action);
         tb.appendChild(tr);
@@ -944,7 +1018,7 @@
       wrap.appendChild(table);
       root.appendChild(wrap);
     }
-    var actions = h("div", "actions open-actions");
+    var actions = h("div", "actions open-actions noprint");
     actions.appendChild(button("Dodaj punkt", addItem));
     if (model.hidden) actions.appendChild(button("Przywróć usunięte (" + model.hidden + ")", restoreDeleted));
     root.appendChild(actions);
@@ -955,6 +1029,7 @@
     root.textContent = "";
     root.appendChild(h("h2", "", "ÜBERGABEBERICHT DISPOSITION"));
     metaEl = root.appendChild(h("p", "meta", metaLine()));
+    root.appendChild(h("p", "meta print-only", "Legende: ■ Störung  ▲ Verspätet  ► Unterwegs  ✓ Erledigt  ? Zu prüfen"));
     var s = model.status.view;
     root.appendChild(h("h3", "", s.title));
     if (s.empty) {
@@ -983,6 +1058,7 @@
   function showModel(next) {
     model = next;
     el.copy.disabled = false;
+    el.print.disabled = false;
     el.carry.disabled = false;
     renderReport();
   }
@@ -991,6 +1067,7 @@
     model = null;
     el.report.textContent = "Tu pojawi się raport.";
     el.copy.disabled = true;
+    el.print.disabled = true;
     el.carry.disabled = true;
   }
 
@@ -1212,6 +1289,7 @@
   el.notes.addEventListener("input", saveDraft);
   el.gen.addEventListener("click", generate);
   el.copy.addEventListener("click", copyReport);
+  el.print.addEventListener("click", function () { closeConfirm(); window.print(); });
   el.carry.addEventListener("click", carryOver);
   el.sample.addEventListener("click", function () {
     guardUnsaved(function () {
