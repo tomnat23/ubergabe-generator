@@ -39,7 +39,7 @@ Przycisk jest nieaktywny, dopóki nie ma raportu i poprawnego adresu. Adres webh
 - Dane zostają **w Twojej przeglądarce** (`localStorage`), **chyba że sam klikniesz „Wyślij na Telegram”** i potwierdzisz. Wtedy tekst raportu (z notatkami i nazwiskami) trafia na podany przez Ciebie adres n8n, a stamtąd na grupę Telegram. Aplikacja nie może go stamtąd usunąć.
 - Dane **nie przechodzą między urządzeniami** ani przeglądarkami. Wyczyszczenie danych przeglądarki je usuwa.
 - Zapisywana jest wersja robocza, imię dyspozytora, adres webhooka i historia ostatnich 10 przekazań.
-- Dane nie są szyfrowane. Na wspólnym komputerze po pracy kliknij **Wyczyść dane** (usuwa też adres webhooka).
+- Dane nie są szyfrowane. Na wspólnym komputerze po pracy kliknij **Wyczyść dane**, a potem **wyczyść pole z adresem webhooka** w Ustawieniach: „Wyczyść dane” go nie usuwa. Zamknij też inne karty z aplikacją, bo mogą zapisać dane i adres ponownie.
 
 ## Dane przykładowe
 
@@ -48,3 +48,7 @@ Dane przykładowe (przycisk „Wczytaj przykład” i folder `dane-przykladowe/`
 ## Uruchomienie lokalne
 
 Cała aplikacja to jeden plik: otwórz `index.html` w przeglądarce.
+
+## Testy
+
+`node tests/wysylka.test.js` sprawdza wysyłkę na Telegram i zapis adresu webhooka (wymaga Node.js). Przeglądarka i połączenie są udawane, więc nic nie jest wysyłane.

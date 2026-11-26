@@ -108,6 +108,10 @@
   button.danger { border-color: var(--delayed-bd); color: var(--delayed-fg); }
   summary { font-weight: 600; cursor: pointer; }
   #settings label { margin-top: 10px; }
+  #reportCard > .actions { align-items: flex-start; }
+  #reportCard > .actions > strong, #sendState { padding-top: 9px; }
+  .send-box { display: inline-flex; flex-direction: column; align-items: center; gap: 3px; }
+  #sendHint { font-size: .75rem; color: var(--muted); }
   #sendState { font-size: .9rem; color: var(--muted); overflow-wrap: anywhere; }
   #sendState.err { color: #c0392b; font-weight: 600; }
   #confirm {
@@ -198,7 +202,7 @@
   <details class="card" id="settings">
     <summary>Ustawienia</summary>
     <label>Adres webhooka n8n <input type="url" id="webhook" placeholder="https://…/webhook/…" autocomplete="off" spellcheck="false"></label>
-    <p class="hint">Pełny adres zaczynający się od https://. Zapisywany tylko w tej przeglądarce.</p>
+    <p class="hint">Pełny adres zaczynający się od https://. Zapisywany tylko w tej przeglądarce. „Wyczyść dane” go nie usuwa: żeby go usunąć, wyczyść to pole.</p>
   </details>
 
   <section class="cols">
@@ -226,7 +230,10 @@
       <strong>Raport</strong>
       <button id="copy" disabled>Kopiuj raport</button>
       <button id="print" disabled>Drukuj / PDF</button>
-      <button id="send" disabled>Wyślij na Telegram</button>
+      <span class="send-box">
+        <button id="send" disabled aria-describedby="sendHint">Wyślij na Telegram</button>
+        <small id="sendHint"></small>
+      </span>
       <button id="carry" disabled>Przenieś otwarte sprawy na następną zmianę</button>
       <span id="sendState" role="status"></span>
     </div>
@@ -294,7 +301,7 @@
     copy: $("copy"), report: $("report"), msg: $("msg"),
     print: $("print"), carry: $("carry"), wipe: $("wipe"), saveState: $("saveState"), history: $("history"),
     confirm: $("confirm"), confirmText: $("confirmText"), confirmYes: $("confirmYes"), confirmNo: $("confirmNo"),
-    webhook: $("webhook"), send: $("send"), sendState: $("sendState")
+    webhook: $("webhook"), send: $("send"), sendState: $("sendState"), sendHint: $("sendHint")
   };
 
   function todayISO() {
@@ -1261,9 +1268,9 @@
   function wipeAll() {
     var ok = true;
     try {
-      [KEY_DRAFT, KEY_HISTORY, KEY_WHO, KEY_WEBHOOK].forEach(function (k) { localStorage.removeItem(k); });
+      // KEY_WEBHOOK zostaje: to ustawienie, nie dane zmiany
+      [KEY_DRAFT, KEY_HISTORY, KEY_WHO].forEach(function (k) { localStorage.removeItem(k); });
     } catch (e) { ok = false; }
-    el.webhook.value = "";
     el.orders.value = "";
     el.notes.value = "";
     el.who.value = "";
@@ -1273,7 +1280,7 @@
     hideModel();
     renderHistory();
     el.saveState.textContent = "";
-    say(ok ? "Usunięto wersję roboczą, historię, zapamiętane imię i adres webhooka." : "Nie udało się usunąć danych z przeglądarki.", !ok);
+    say(ok ? "Usunięto wersję roboczą, historię i zapamiętane imię. Adres webhooka n8n został." : "Nie udało się usunąć danych z przeglądarki.", !ok);
   }
 
   function copyReport() {
@@ -1308,7 +1315,19 @@
     return /^https?:\/\/[^\s\/]\S*$/i.test(u) ? u : "";
   }
 
-  function updateSend() { el.send.disabled = sending || !model || !webhookUrl(); }
+  // Zapis nie może zależeć tylko od zdarzeń pola: adres bywa w polu bez nich,
+  // a klucz może usunąć inna karta. Skoro aplikacja używa adresu, to ma on być zapisany.
+  function rememberWebhook() {
+    var url = webhookUrl();
+    if (url && storeGet(KEY_WEBHOOK) !== url) storeSet(KEY_WEBHOOK, url);
+  }
+
+  function updateSend() {
+    rememberWebhook();
+    var url = webhookUrl();
+    el.send.disabled = sending || !model || !url;
+    el.sendHint.textContent = sending ? "" : !url ? "Ustaw adres webhooka" : !model ? "Najpierw wygeneruj raport" : "";
+  }
 
   function setSendState(text, isErr) {
     el.sendState.textContent = text;
@@ -1417,6 +1436,7 @@
   el.carry.addEventListener("click", carryOver);
   el.send.addEventListener("click", askSend);
   el.webhook.addEventListener("input", webhookChanged);
+  el.webhook.addEventListener("change", webhookChanged);
   el.sample.addEventListener("click", function () {
     guardUnsaved(function () {
       draft = newDraft();
@@ -1437,7 +1457,7 @@
     say("");
   });
   el.wipe.addEventListener("click", function () {
-    ask("Usunąć wersję roboczą, historię przekazań, zapamiętane imię i adres webhooka n8n? Tego nie da się cofnąć.", "Tak, usuń wszystko", wipeAll);
+    ask("Usunąć wersję roboczą, historię przekazań i zapamiętane imię? Adres webhooka n8n zostanie. Tego nie da się cofnąć.", "Tak, usuń dane", wipeAll);
   });
   el.confirmYes.addEventListener("click", function () {
     var action = pendingConfirm;
