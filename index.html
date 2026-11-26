@@ -94,7 +94,23 @@
   }
   .notes { white-space: pre-wrap; margin: 0; }
   .open td.sache { white-space: normal; min-width: 260px; }
-  .open td.missing { color: var(--problem-fg); background: var(--problem-bg); font-style: italic; }
+  .open td.missing { background: var(--problem-bg); }
+  .open input { margin: 0; padding: 4px 6px; min-width: 150px; background: var(--card); }
+  .open td.sache input { min-width: 260px; }
+  .open td.missing input { background: var(--problem-bg); border-color: var(--problem-bd); }
+  .open td.missing input::placeholder { color: var(--problem-fg); font-style: italic; opacity: 1; }
+  .open button, #history button { padding: 3px 10px; font-size: .85rem; }
+  .tag { display: inline-block; margin-left: 6px; padding: 0 7px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: .75rem; }
+  .open-actions { margin-top: 8px; }
+  .history-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--line); }
+  #saveState { color: var(--muted); font-size: .8rem; margin-left: auto; }
+  #saveState.err { color: #c0392b; font-weight: 600; }
+  button.danger { border-color: var(--delayed-bd); color: var(--delayed-fg); }
+  #confirm {
+    position: fixed; left: 16px; right: 16px; bottom: 16px; max-width: 760px; margin: 0 auto; z-index: 10;
+    border: 2px solid var(--delayed-bd); box-shadow: 0 6px 24px rgba(0,0,0,.35);
+  }
+  [hidden] { display: none !important; }
 </style>
 </head>
 <body>
@@ -131,16 +147,30 @@
     <button class="primary" id="gen">Generuj</button>
     <button id="sample">Wczytaj przykład</button>
     <button id="clear">Wyczyść pola</button>
+    <button id="wipe" class="danger">Wyczyść dane</button>
     <span id="msg"></span>
+    <span id="saveState"></span>
   </section>
 
   <section class="card">
     <div class="actions" style="margin-bottom:10px">
       <strong>Raport</strong>
       <button id="copy" disabled>Kopiuj raport</button>
+      <button id="carry" disabled>Przenieś otwarte sprawy na następną zmianę</button>
     </div>
     <div id="report" class="report">Tu pojawi się raport.</div>
   </section>
+
+  <section class="card">
+    <strong>Historia przekazań (ostatnie 10)</strong>
+    <div id="history"></div>
+  </section>
+
+  <div id="confirm" class="card actions" role="alertdialog" aria-labelledby="confirmText" hidden>
+    <span id="confirmText"></span>
+    <button id="confirmYes" class="danger">Tak</button>
+    <button id="confirmNo">Anuluj</button>
+  </div>
 </main>
 
 <script>
@@ -189,10 +219,10 @@
     date: $("date"), shift: $("shift"), who: $("who"),
     orders: $("orders"), notes: $("notes"),
     gen: $("gen"), sample: $("sample"), clear: $("clear"),
-    copy: $("copy"), report: $("report"), msg: $("msg")
+    copy: $("copy"), report: $("report"), msg: $("msg"),
+    carry: $("carry"), wipe: $("wipe"), saveState: $("saveState"), history: $("history"),
+    confirm: $("confirm"), confirmText: $("confirmText"), confirmYes: $("confirmYes"), confirmNo: $("confirmNo")
   };
-
-  var lastReport = "";
 
   function todayISO() {
     var d = new Date();
@@ -400,7 +430,8 @@
 
   // ---- Etap 3: otwarte sprawy z notatek --------------------------------------
   var MISSING = "ergänzen";
-  var SORT_HINT = "(Sortiert: zuerst Störung, dann Verspätet, dann nach Termin)";
+  var SORT_HINT = "(Sortiert: Störung, Verspätet, dann Fehlendes/Panne ohne Termin, dann nach Termin)";
+  var URGENT_RE = /(?<!\p{L})(?:fehl(?:t|en)(?!\p{L})|brak|panne)/iu;
   var NAME = "\\p{Lu}[\\p{L}-]*";
 
   // Linia jest "otwarta", jeśli zawiera któreś ze słów-kluczy (PL i DE).
@@ -440,7 +471,8 @@
   var REL_RE = /(?<!\p{L})(jutro|morgen|dziś|dzisiaj|heute|pojutrze|übermorgen)(?!\p{L})(?:\s+(rano|früh|wieczorem|abends|vormittags|nachmittags|po południu))?/iu;
   var WD_RE = /(?<!\p{L})(?:do|bis|am|na|spätestens|najpóźniej|vor)\s+(poniedział\p{L}*|wtor\p{L}*|środ\p{L}*|czwart\p{L}*|piąt\p{L}*|sobot\p{L}*|niedziel\p{L}*|montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag)(?!\p{L})/iu;
   var DATE_RE = /(?<![\d.])(\d{1,2})\.(\d{1,2})\.(\d{4}|\d{2})?(?!\d)/;
-  var TIME_A = /(?<!\p{L})(?:bis|do|spätestens|najpóźniej|vor)\s+(\d{1,2})[:.](\d{2})(?!\d)/iu;
+  // kropka jako separator godziny, ale nie dla dat typu "05.12."
+  var TIME_A = /(?<!\p{L})(?:bis|do|spätestens|najpóźniej|vor)\s+(\d{1,2})(?::|\.(?!\d{2}\.))(\d{2})(?!\d)/iu;
   var TIME_B = /(?<!\p{L})(?:bis|do|spätestens|najpóźniej|vor)\s+(\d{1,2})\s*(?:Uhr|godz\.?)/iu;
   var UNSURE_RE = /chyba|prawdopodobnie|vermutlich|wahrscheinlich/i;
 
@@ -565,9 +597,9 @@
     return hits;
   }
 
-  // 0 = Störung, 1 = Verspätet, 2 = reszta
-  function rankOf(lkws, statusByLkw) {
-    var rank = 2;
+  // 0 = Störung, 1 = Verspätet, 2 = bez terminu + fehlt/brak/Panne, 3 = reszta
+  function rankOf(sache, hasTermin, lkws, statusByLkw) {
+    var rank = (!hasTermin && URGENT_RE.test(sache)) ? 2 : 3;
     lkws.forEach(function (l) {
       var g = statusByLkw[l];
       if (g === "problem") rank = Math.min(rank, 0);
@@ -576,10 +608,18 @@
     return rank;
   }
 
-  // Zwraca { items (posortowane), rest (linie bez otwartej sprawy) }
-  function extractOpenItems(notes, idx, statusByLkw, ref) {
-    var items = [], rest = [];
-    notes.split(/\r?\n/).forEach(function (raw, order) {
+  // Klucz sortowania dla tekstu terminu (także wpisanego ręcznie)
+  function terminKey(text, ref) {
+    if (!text) return Infinity;
+    var key = extractTermin(text, ref).key;
+    if (key === Infinity) key = extractTermin("bis " + text, ref).key;
+    return key === Infinity ? 1e9 : key;
+  }
+
+  // Zwraca { items (z notatek, bez sortowania), rest (linie bez otwartej sprawy) }
+  function extractOpenItems(notes, idx, ref) {
+    var items = [], rest = [], seen = {};
+    notes.split(/\r?\n/).forEach(function (raw) {
       var trimmed = raw.trim();
       if (!trimmed) return;
       var line = trimmed.replace(/^[-*•–]+\s*/, "");
@@ -594,33 +634,184 @@
         });
       }
       var lkwText = refs.lkws.concat(refs.auftraege).join(" · ");
+      seen[line] = (seen[line] || 0) + 1;
       items.push({
+        id: "n:" + line + (seen[line] > 1 ? "#" + seen[line] : ""),
+        isManual: false,
         sache: line,
-        person: person || MISSING,
-        termin: t.text || MISSING,
-        lkw: lkwText ? lkwText + (viaCustomer ? " (Kunde)" : "") : "—",
-        pMissing: !person,
-        tMissing: !t.text,
-        rank: rankOf(refs.lkws, statusByLkw || {}),
-        key: t.key,
-        order: order
+        person: person,
+        termin: t.text,
+        lkw: lkwText ? lkwText + (viaCustomer ? " (Kunde)" : "") : "",
+        lkws: refs.lkws,
+        from: ""
       });
+    });
+    return { items: items, rest: rest };
+  }
+
+  // ---- Etap 4: ręczne poprawki -----------------------------------------------
+  function emptyManual() { return { edits: {}, deleted: [], added: [] }; }
+
+  function str(v) { return typeof v === "string" ? v : ""; }
+
+  // Odporność na uszkodzone dane z localStorage
+  function normManual(m) {
+    var out = emptyManual();
+    if (!m || typeof m !== "object") return out;
+    if (m.edits && typeof m.edits === "object") out.edits = m.edits;
+    if (Array.isArray(m.deleted)) out.deleted = m.deleted.filter(function (x) { return typeof x === "string"; });
+    if (Array.isArray(m.added)) {
+      out.added = m.added.filter(function (a) { return a && typeof a.id === "string"; }).map(function (a) {
+        return { id: a.id, sache: str(a.sache), person: str(a.person), termin: str(a.termin), lkw: str(a.lkw), from: str(a.from) };
+      });
+    }
+    return out;
+  }
+
+  // Model raportu = dane wejściowe + ręczne poprawki, posortowane
+  function deriveModel(src, manual) {
+    var parsed = parseOrders(src.orders);
+    if (parsed.error) return { error: parsed.error };
+    var status = buildStatusSection(parsed);
+    var idx = ordersIndex(parsed), ref = refDate();
+    var found = extractOpenItems(src.notes, idx, ref);
+
+    var taken = {};
+    manual.added.forEach(function (a) { if (a.sache) taken[a.sache] = true; });
+    var all = found.items.filter(function (it) { return !taken[it.sache]; });
+    all.forEach(function (it) {
+      var e = Object.prototype.hasOwnProperty.call(manual.edits, it.id) ? manual.edits[it.id] : null;
+      if (!e) return;
+      if (typeof e.person === "string") it.person = e.person;
+      if (typeof e.termin === "string") it.termin = e.termin;
+    });
+    manual.added.forEach(function (a) {
+      all.push({
+        id: a.id, isManual: true, sache: a.sache, person: a.person, termin: a.termin, lkw: a.lkw,
+        lkws: extractRefs(a.lkw, idx.byAuftrag).lkws, from: a.from
+      });
+    });
+
+    var items = all.filter(function (it) { return manual.deleted.indexOf(it.id) === -1; });
+    var hidden = all.length - items.length;
+    items.forEach(function (it, i) {
+      it.order = i;
+      it.rank = it.sache ? rankOf(it.sache, !!it.termin, it.lkws, status.byLkw) : 9;
+      it.key = terminKey(it.termin, ref);
     });
     items.sort(function (a, b) {
       return (a.rank - b.rank) || (a.key === b.key ? 0 : a.key < b.key ? -1 : 1) || (a.order - b.order);
     });
-    return { items: items, rest: rest };
+    return {
+      src: src,
+      status: status,
+      items: items,
+      hidden: hidden,
+      rest: found.rest.length ? found.rest.join("\n") : "Keine sonstigen Notizen."
+    };
+  }
+
+  function filledItems() {
+    return model ? model.items.filter(function (it) { return it.sache.trim() !== ""; }) : [];
   }
 
   function itemsText(items) {
     if (!items.length) return "Keine offenen Punkte erkannt.";
     return items.map(function (it, i) {
-      return (i + 1) + ". " + it.sache + "\n   Person: " + it.person + " | Termin: " + it.termin + " | LKW: " + it.lkw;
+      return (i + 1) + ". " + it.sache + (it.from ? " [übernommen: " + it.from + "]" : "") +
+             "\n   Person: " + (it.person || MISSING) + " | Termin: " + (it.termin || MISSING) +
+             " | LKW: " + (it.lkw || "—");
     }).join("\n");
   }
 
-  var lastNote = "";
-  var lastView = null;
+  function metaLine() {
+    return "Datum: " + dateDE(el.date.value) + "  |  Schicht: " + el.shift.value +
+           "  |  Disponent: " + (el.who.value.trim() || "—");
+  }
+
+  // Wersja tekstowa do schowka, zawsze z aktualnego modelu (z ręcznymi poprawkami)
+  function composeText() {
+    var items = filledItems();
+    var out = ["ÜBERGABEBERICHT DISPOSITION", metaLine(), "=".repeat(60), "", model.status.text, ""];
+    out.push("2. OFFENE PUNKTE (" + items.length + ")");
+    if (items.length) out.push(SORT_HINT);
+    out.push("", itemsText(items), "", "3. SONSTIGE NOTIZEN", "", model.rest, "");
+    return out.join("\n");
+  }
+
+  var model = null;   // aktualnie wyświetlany raport
+  var draft = null;   // wersja robocza: { id, manual }
+  var metaEl = null;
+  var openEl = null;
+  var pendingConfirm = null;
+
+  // ---- Zapis lokalny (wszystko w try/catch) ----------------------------------
+  var KEY_DRAFT = "uebergabe.draft.v1";
+  var KEY_HISTORY = "uebergabe.history.v1";
+  var KEY_WHO = "uebergabe.who";
+  var HISTORY_LIMIT = 10;
+
+  function setSaveState(ok) {
+    el.saveState.textContent = ok ? "Zapisano w tej przeglądarce" : "Uwaga: zapis lokalny nie działa, dane znikną po odświeżeniu";
+    el.saveState.className = ok ? "" : "err";
+  }
+
+  function storeGet(key) {
+    try {
+      var raw = localStorage.getItem(key);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) { return null; }
+  }
+
+  function storeSet(key, value) {
+    try {
+      localStorage.setItem(key, JSON.stringify(value));
+      setSaveState(true);
+    } catch (e) { setSaveState(false); }
+  }
+
+  function newId(prefix) {
+    return prefix + ":" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+  }
+
+  function newDraft() { return { id: newId("r"), manual: emptyManual() }; }
+
+  function saveDraft() {
+    storeSet(KEY_DRAFT, {
+      id: draft.id,
+      date: el.date.value, shift: el.shift.value, who: el.who.value,
+      orders: el.orders.value, notes: el.notes.value,
+      src: model ? model.src : null,
+      manual: draft.manual
+    });
+  }
+
+  function loadHistory() {
+    var list = storeGet(KEY_HISTORY);
+    return Array.isArray(list) ? list.filter(function (e) { return e && typeof e.id === "string"; }) : [];
+  }
+
+  // Jeden wpis na przekazanie; zmiana daty lub zmiany roboczej tworzy nowy wpis
+  function saveHistory() {
+    if (!model) return;
+    var list = loadHistory();
+    var old = list.filter(function (e) { return e.id === draft.id; })[0];
+    if (old && (old.date !== el.date.value || old.shift !== el.shift.value)) draft.id = newId("r");
+    list = list.filter(function (e) { return e.id !== draft.id; });
+    list.unshift({
+      id: draft.id, savedAt: new Date().toISOString(),
+      date: el.date.value, shift: el.shift.value, who: el.who.value,
+      orders: model.src.orders, notes: model.src.notes,
+      manual: draft.manual, openCount: filledItems().length
+    });
+    storeSet(KEY_HISTORY, list.slice(0, HISTORY_LIMIT));
+    renderHistory();
+  }
+
+  function persist() {
+    saveHistory();
+    saveDraft();
+  }
 
   // ---- Widok na ekranie (kolorowy HTML); do schowka idzie wersja tekstowa ----
   function h(tag, cls, text) {
@@ -652,13 +843,120 @@
     return wrap;
   }
 
-  function renderReport(v) {
+  function editCell(item, field, label, cls) {
+    var markMissing = field === "person" || field === "termin";
+    var td = h("td", cls || "");
+    var input = h("input");
+    input.type = "text";
+    input.value = item[field];
+    input.placeholder = markMissing ? MISSING : label;
+    input.setAttribute("aria-label", label);
+    input.setAttribute("data-id", item.id);
+    input.setAttribute("data-field", field);
+    var paint = function () {
+      if (markMissing) td.className = item[field] ? (cls || "") : ((cls || "") + " missing").trim();
+    };
+    paint();
+    input.addEventListener("input", function () {
+      var value = input.value.trim();
+      if (markMissing && value.toLowerCase() === MISSING) value = "";
+      item[field] = value;
+      if (item.isManual) {
+        draft.manual.added.forEach(function (a) { if (a.id === item.id) a[field] = value; });
+      } else {
+        var e = Object.prototype.hasOwnProperty.call(draft.manual.edits, item.id) ? draft.manual.edits[item.id] : {};
+        e[field] = value;
+        draft.manual.edits[item.id] = e;
+      }
+      paint();
+      persist();
+    });
+    td.appendChild(input);
+    return td;
+  }
+
+  function removeItem(item) {
+    model.items.splice(model.items.indexOf(item), 1);
+    if (item.isManual && !item.sache.trim()) {
+      // pusty punkt usuwamy na stałe
+      draft.manual.added = draft.manual.added.filter(function (a) { return a.id !== item.id; });
+    } else {
+      draft.manual.deleted.push(item.id);
+      model.hidden++;
+    }
+    renderOpen();
+    persist();
+  }
+
+  function addItem() {
+    var a = { id: newId("m"), sache: "", person: "", termin: "", lkw: "", from: "" };
+    draft.manual.added.push(a);
+    model.items.push({ id: a.id, isManual: true, sache: "", person: "", termin: "", lkw: "", lkws: [], from: "" });
+    renderOpen();
+    persist();
+    var input = openEl.querySelector('input[data-id="' + a.id + '"][data-field="sache"]');
+    if (input) input.focus();
+  }
+
+  function restoreDeleted() {
+    draft.manual.deleted = [];
+    model = deriveModel(model.src, draft.manual);
+    renderReport();
+    persist();
+  }
+
+  function button(label, onClick) {
+    var b = h("button", "", label);
+    b.type = "button";
+    b.addEventListener("click", onClick);
+    return b;
+  }
+
+  function renderOpen() {
+    var root = openEl;
+    root.textContent = "";
+    root.appendChild(h("h3", "", "2. OFFENE PUNKTE (" + model.items.length + ")"));
+    if (!model.items.length) {
+      root.appendChild(h("p", "", "Keine offenen Punkte erkannt."));
+    } else {
+      root.appendChild(h("p", "hint", SORT_HINT));
+      root.appendChild(h("p", "hint", "Person i Termin możesz poprawiać. Kolejność odświeża się po „Generuj”."));
+      var wrap = h("div", "tablewrap");
+      var table = h("table", "open");
+      var hr = h("tr");
+      ["Sache", "Person", "Termin", "LKW", ""].forEach(function (c) { hr.appendChild(h("th", "", c)); });
+      table.appendChild(h("thead")).appendChild(hr);
+      var tb = h("tbody");
+      model.items.forEach(function (it) {
+        var tr = h("tr");
+        var sache = it.isManual ? editCell(it, "sache", "Sache", "sache") : h("td", "sache", it.sache);
+        if (it.from) sache.appendChild(h("span", "tag", "übernommen: " + it.from));
+        tr.appendChild(sache);
+        tr.appendChild(editCell(it, "person", "Person"));
+        tr.appendChild(editCell(it, "termin", "Termin"));
+        tr.appendChild(it.isManual ? editCell(it, "lkw", "LKW") : h("td", "", it.lkw || "—"));
+        var action = h("td");
+        action.appendChild(button("usuń", function () { removeItem(it); }));
+        tr.appendChild(action);
+        tb.appendChild(tr);
+      });
+      table.appendChild(tb);
+      wrap.appendChild(table);
+      root.appendChild(wrap);
+    }
+    var actions = h("div", "actions open-actions");
+    actions.appendChild(button("Dodaj punkt", addItem));
+    if (model.hidden) actions.appendChild(button("Przywróć usunięte (" + model.hidden + ")", restoreDeleted));
+    root.appendChild(actions);
+  }
+
+  function renderReport() {
     var root = el.report;
     root.textContent = "";
     root.appendChild(h("h2", "", "ÜBERGABEBERICHT DISPOSITION"));
-    root.appendChild(h("p", "meta", v.meta));
-    root.appendChild(h("h3", "", v.status.title));
-    var s = v.status;
+    metaEl = root.appendChild(h("p", "meta", metaLine()));
+    var s = model.status.view;
+    root.appendChild(h("h3", "", s.title));
     if (s.empty) {
       root.appendChild(h("p", "", "Keine Aufträge übergeben."));
     } else if (s.flat) {
@@ -676,86 +974,193 @@
         root.appendChild(sec);
       });
     }
-    root.appendChild(h("h3", "", "2. OFFENE PUNKTE (" + v.items.length + ")"));
-    if (v.items.length) root.appendChild(h("p", "hint", SORT_HINT));
-    if (!v.items.length) {
-      root.appendChild(h("p", "", "Keine offenen Punkte erkannt."));
-    } else {
-      var wrap = h("div", "tablewrap");
-      var table = h("table", "open");
-      var hr = h("tr");
-      ["Sache", "Person", "Termin", "LKW"].forEach(function (c) { hr.appendChild(h("th", "", c)); });
-      table.appendChild(h("thead")).appendChild(hr);
-      var tb = h("tbody");
-      v.items.forEach(function (it) {
-        var tr = h("tr");
-        tr.appendChild(h("td", "sache", it.sache));
-        tr.appendChild(h("td", it.pMissing ? "missing" : "", it.person));
-        tr.appendChild(h("td", it.tMissing ? "missing" : "", it.termin));
-        tr.appendChild(h("td", "", it.lkw));
-        tb.appendChild(tr);
-      });
-      table.appendChild(tb);
-      wrap.appendChild(table);
-      root.appendChild(wrap);
-    }
+    openEl = root.appendChild(h("div"));
+    renderOpen();
     root.appendChild(h("h3", "", "3. SONSTIGE NOTIZEN"));
-    root.appendChild(h("p", "notes", v.notes));
+    root.appendChild(h("p", "notes", model.rest));
   }
 
-  function buildReport() {
-    var parsed = parseOrders(el.orders.value);
-    if (parsed.error) { say(parsed.error, true); return null; }
+  function showModel(next) {
+    model = next;
+    el.copy.disabled = false;
+    el.carry.disabled = false;
+    renderReport();
+  }
 
-    var notes = el.notes.value.replace(/\s+$/, "");
-    if (parsed.rows.length === 0 && notes === "") {
-      say("Wklej zlecenia lub notatki.", true);
-      return null;
-    }
+  function hideModel() {
+    model = null;
+    el.report.textContent = "Tu pojawi się raport.";
+    el.copy.disabled = true;
+    el.carry.disabled = true;
+  }
 
-    var out = [];
-    out.push("ÜBERGABEBERICHT DISPOSITION");
-    var meta = "Datum: " + dateDE(el.date.value) + "  |  Schicht: " + el.shift.value +
-               "  |  Disponent: " + (el.who.value.trim() || "—");
-    out.push(meta);
-    out.push("=".repeat(60));
-    out.push("");
-    var status = buildStatusSection(parsed);
-    lastNote = status.note;
-    var found = extractOpenItems(notes, ordersIndex(parsed), status.byLkw, refDate());
-    var items = found.items;
-    var restText = found.rest.length ? found.rest.join("\n") : "Keine sonstigen Notizen.";
-    lastView = { meta: meta, status: status.view, items: items, notes: restText };
-    out.push(status.text);
-    out.push("");
-    out.push("2. OFFENE PUNKTE (" + items.length + ")");
-    if (items.length) out.push(SORT_HINT);
-    out.push("");
-    out.push(itemsText(items));
-    out.push("");
-    out.push("3. SONSTIGE NOTIZEN");
-    out.push("");
-    out.push(restText);
-    out.push("");
-    return out.join("\n");
+  function currentSrc() {
+    return { orders: el.orders.value, notes: el.notes.value.replace(/\s+$/, "") };
   }
 
   function generate() {
     say("");
-    var text = buildReport();
-    if (text === null) return;
-    lastReport = text;
-    renderReport(lastView);
-    el.copy.disabled = false;
-    say(lastNote ? "Raport gotowy. " + lastNote : "Raport gotowy.");
+    draft.manual.added = draft.manual.added.filter(function (a) { return a.sache.trim() !== ""; });
+    var next = deriveModel(currentSrc(), draft.manual);
+    if (next.error) { say(next.error, true); return; }
+    if (next.src.orders.trim() === "" && next.src.notes === "" && !next.items.length) {
+      say("Wklej zlecenia lub notatki.", true);
+      return;
+    }
+    showModel(next);
+    persist();
+    say(next.status.note ? "Raport gotowy. " + next.status.note : "Raport gotowy.");
+  }
+
+  // ---- Potwierdzenie na stronie (bez alert/confirm przeglądarki) -------------
+  function ask(text, yesLabel, onYes) {
+    pendingConfirm = onYes;
+    el.confirmText.textContent = text;
+    el.confirmYes.textContent = yesLabel;
+    el.confirm.hidden = false;
+    el.confirmNo.focus();
+  }
+
+  function closeConfirm() {
+    pendingConfirm = null;
+    el.confirm.hidden = true;
+  }
+
+  // Czy w polach jest coś, czego nie ma jeszcze w żadnym raporcie?
+  function hasUnsaved() {
+    var now = currentSrc();
+    if (now.orders.trim() === "" && now.notes === "") return false;
+    return !model || model.src.orders !== now.orders || model.src.notes !== now.notes;
+  }
+
+  function guardUnsaved(action) {
+    if (!hasUnsaved()) { closeConfirm(); action(); return; }
+    ask("W polach są dane, dla których nie kliknięto „Generuj”. Zostaną zastąpione. Kontynuować?", "Tak, zastąp", action);
+  }
+
+  // ---- Historia --------------------------------------------------------------
+  function renderHistory() {
+    var list = loadHistory();
+    el.history.textContent = "";
+    if (!list.length) {
+      el.history.appendChild(h("p", "hint", "Brak zapisanych przekazań. Pojawią się po „Generuj”."));
+      return;
+    }
+    list.forEach(function (entry) {
+      var saved = new Date(entry.savedAt);
+      var label = dateDE(entry.date) + " · " + str(entry.shift) + " · " + (str(entry.who).trim() || "—") +
+                  " · offene Punkte: " + (entry.openCount || 0) +
+                  " · zapis " + pad2(saved.getDate()) + "." + pad2(saved.getMonth() + 1) + ". " +
+                  pad2(saved.getHours()) + ":" + pad2(saved.getMinutes());
+      var row = h("div", "history-row");
+      row.appendChild(h("span", "", label));
+      row.appendChild(button("Wczytaj", function () {
+        guardUnsaved(function () { loadEntry(entry.id); });
+      }));
+      el.history.appendChild(row);
+    });
+  }
+
+  function setForm(data) {
+    if (data.date) el.date.value = data.date;
+    if (data.shift) el.shift.value = data.shift;
+    el.who.value = str(data.who);
+    el.orders.value = str(data.orders);
+    el.notes.value = str(data.notes);
+  }
+
+  function loadEntry(id) {
+    var entry = loadHistory().filter(function (e) { return e.id === id; })[0];
+    if (!entry) { say("Nie znaleziono wpisu w historii.", true); return; }
+    setForm(entry);
+    draft = { id: entry.id, manual: normManual(entry.manual) };
+    var next = deriveModel({ orders: str(entry.orders), notes: str(entry.notes) }, draft.manual);
+    if (next.error) { say(next.error, true); return; }
+    showModel(next);
+    saveDraft();
+    say("Wczytano przekazanie z historii.");
+  }
+
+  // ---- Przeniesienie na następną zmianę --------------------------------------
+  function fullDate(d) {
+    return pad2(d.getDate()) + "." + pad2(d.getMonth() + 1) + "." + d.getFullYear();
+  }
+
+  function addDays(d, n) { return new Date(d.getFullYear(), d.getMonth(), d.getDate() + n); }
+
+  // "heute", "morgen", "bis 16:00", "bis Freitag" -> konkretna data, żeby po zmianie dnia nie myliły
+  function absoluteTermin(text, ref) {
+    var m;
+    if (!text) return "";
+    if ((m = /^(heute|morgen|übermorgen)(?!\p{L})(.*)$/iu.exec(text))) {
+      var days = { heute: 0, morgen: 1, "übermorgen": 2 }[m[1].toLowerCase()];
+      return fullDate(addDays(ref, days)) + m[2];
+    }
+    if ((m = /^bis (\d{1,2}:\d{2})(.*)$/i.exec(text))) {
+      return fullDate(ref) + ", bis " + m[1] + m[2];
+    }
+    if ((m = /^bis (Montag|Dienstag|Mittwoch|Donnerstag|Freitag|Samstag|Sonntag)(.*)$/.exec(text))) {
+      var rest = m[2].replace(/^, (\d{2}:\d{2})/, ", bis $1");
+      return fullDate(addDays(ref, (WEEKDAY_NUM[m[1]] - ref.getDay() + 7) % 7)) + rest;
+    }
+    return text;
+  }
+
+  function carryOver() {
+    if (!filledItems().length) { say("Brak otwartych spraw do przeniesienia.", true); return; }
+    guardUnsaved(function () {
+      saveHistory();
+      var ref = refDate();
+      var label = dateDE(el.date.value) + ", " + el.shift.value;
+      var carried = filledItems().map(function (it) {
+        return {
+          id: newId("m"), sache: it.sache, person: it.person,
+          termin: absoluteTermin(it.termin, ref), lkw: it.lkw, from: it.from || label
+        };
+      });
+      var shifts = ["Frühschicht", "Spätschicht", "Nachtschicht"];
+      var pos = shifts.indexOf(el.shift.value);
+      if (pos === shifts.length - 1) {
+        var next = addDays(ref, 1);
+        el.date.value = next.getFullYear() + "-" + pad2(next.getMonth() + 1) + "-" + pad2(next.getDate());
+      }
+      el.shift.value = shifts[(pos + 1) % shifts.length];
+      el.orders.value = "";
+      el.notes.value = "";
+      draft = newDraft();
+      draft.manual.added = carried;
+      showModel(deriveModel(currentSrc(), draft.manual));
+      persist();
+      say("Przeniesiono " + carried.length + " spraw na: " + dateDE(el.date.value) + ", " + el.shift.value +
+          ". Wklej nowe zlecenia i notatki, potem „Generuj”.");
+    });
+  }
+
+  // ---- Wyczyść wszystko ------------------------------------------------------
+  function wipeAll() {
+    var ok = true;
+    try {
+      [KEY_DRAFT, KEY_HISTORY, KEY_WHO].forEach(function (k) { localStorage.removeItem(k); });
+    } catch (e) { ok = false; }
+    el.orders.value = "";
+    el.notes.value = "";
+    el.who.value = "";
+    el.date.value = todayISO();
+    el.shift.selectedIndex = 0;
+    draft = newDraft();
+    hideModel();
+    renderHistory();
+    el.saveState.textContent = "";
+    say(ok ? "Usunięto wersję roboczą, historię i zapamiętane imię." : "Nie udało się usunąć danych z przeglądarki.", !ok);
   }
 
   function copyReport() {
-    if (!lastReport) return;
+    if (!model) return;
+    var text = composeText();
     var done = function () { say("Skopiowano do schowka."); };
     var fallback = function () {
       var ta = document.createElement("textarea");
-      ta.value = lastReport;
+      ta.value = text;
       document.body.appendChild(ta);
       ta.select();
       try { document.execCommand("copy"); done(); }
@@ -763,28 +1168,82 @@
       document.body.removeChild(ta);
     };
     if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(lastReport).then(done, fallback);
+      navigator.clipboard.writeText(text).then(done, fallback);
     } else {
       fallback();
     }
   }
 
-  el.date.value = todayISO();
+  // ---- Start i zdarzenia -----------------------------------------------------
+  function restoreDraft() {
+    var saved = storeGet(KEY_DRAFT);
+    var lastWho = str(storeGet(KEY_WHO));
+    el.date.value = todayISO();
+    draft = newDraft();
+    if (!saved || typeof saved !== "object") {
+      el.who.value = lastWho;
+      return;
+    }
+    setForm(saved);
+    if (!el.who.value) el.who.value = lastWho;
+    if (typeof saved.id === "string") draft.id = saved.id;
+    draft.manual = normManual(saved.manual);
+    if (saved.src) {
+      var next = deriveModel({ orders: str(saved.src.orders), notes: str(saved.src.notes) }, draft.manual);
+      if (!next.error) showModel(next);
+    }
+    if (model || el.orders.value || el.notes.value) {
+      say("Przywrócono wersję roboczą" + (el.date.value !== todayISO() ? " z datą " + dateDE(el.date.value) : "") + ".");
+    }
+  }
+
+  function headerChanged() {
+    if (metaEl && model) metaEl.textContent = metaLine();
+    saveDraft();
+  }
+
+  el.date.addEventListener("input", headerChanged);
+  el.shift.addEventListener("change", headerChanged);
+  el.who.addEventListener("input", function () {
+    if (el.who.value.trim()) storeSet(KEY_WHO, el.who.value.trim());
+    headerChanged();
+  });
+  el.orders.addEventListener("input", saveDraft);
+  el.notes.addEventListener("input", saveDraft);
   el.gen.addEventListener("click", generate);
   el.copy.addEventListener("click", copyReport);
+  el.carry.addEventListener("click", carryOver);
   el.sample.addEventListener("click", function () {
-    el.orders.value = SAMPLE_ORDERS;
-    el.notes.value = SAMPLE_NOTES;
-    say("Wczytano dane przykładowe (fikcyjne).");
+    guardUnsaved(function () {
+      draft = newDraft();
+      hideModel();
+      el.orders.value = SAMPLE_ORDERS;
+      el.notes.value = SAMPLE_NOTES;
+      saveDraft();
+      say("Wczytano dane przykładowe (fikcyjne).");
+    });
   });
   el.clear.addEventListener("click", function () {
+    closeConfirm();
+    draft = newDraft();
+    hideModel();
     el.orders.value = "";
     el.notes.value = "";
-    el.report.textContent = "Tu pojawi się raport.";
-    lastReport = "";
-    el.copy.disabled = true;
+    saveDraft();
     say("");
   });
+  el.wipe.addEventListener("click", function () {
+    ask("Usunąć wersję roboczą, historię przekazań i zapamiętane imię? Tego nie da się cofnąć.", "Tak, usuń wszystko", wipeAll);
+  });
+  el.confirmYes.addEventListener("click", function () {
+    var action = pendingConfirm;
+    closeConfirm();
+    if (action) action();
+  });
+  el.confirmNo.addEventListener("click", closeConfirm);
+
+  restoreDraft();
+  renderHistory();
 })();
 </script>
 </body>
