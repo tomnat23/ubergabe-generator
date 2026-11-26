@@ -106,6 +106,10 @@
   #saveState { color: var(--muted); font-size: .8rem; margin-left: auto; }
   #saveState.err { color: #c0392b; font-weight: 600; }
   button.danger { border-color: var(--delayed-bd); color: var(--delayed-fg); }
+  summary { font-weight: 600; cursor: pointer; }
+  #settings label { margin-top: 10px; }
+  #sendState { font-size: .9rem; color: var(--muted); overflow-wrap: anywhere; }
+  #sendState.err { color: #c0392b; font-weight: 600; }
   #confirm {
     position: fixed; left: 16px; right: 16px; bottom: 16px; max-width: 760px; margin: 0 auto; z-index: 10;
     border: 2px solid var(--delayed-bd); box-shadow: 0 6px 24px rgba(0,0,0,.35);
@@ -175,7 +179,7 @@
 <body>
 <main>
   <h1>Übergabe-Generator</h1>
-  <p class="sub">Wklej notatki i listę zleceń, kliknij „Generuj”. Dane zostają w tej przeglądarce.</p>
+  <p class="sub">Wklej notatki i listę zleceń, kliknij „Generuj”. Dane zostają w tej przeglądarce, chyba że sam klikniesz „Wyślij na Telegram”.</p>
 
   <section class="card">
     <div class="row">
@@ -190,6 +194,12 @@
       <label>Disponent <input type="text" id="who" placeholder="Name"></label>
     </div>
   </section>
+
+  <details class="card" id="settings">
+    <summary>Ustawienia</summary>
+    <label>Adres webhooka n8n <input type="url" id="webhook" placeholder="https://…/webhook/…" autocomplete="off" spellcheck="false"></label>
+    <p class="hint">Pełny adres zaczynający się od https://. Zapisywany tylko w tej przeglądarce.</p>
+  </details>
 
   <section class="cols">
     <div class="card">
@@ -216,7 +226,9 @@
       <strong>Raport</strong>
       <button id="copy" disabled>Kopiuj raport</button>
       <button id="print" disabled>Drukuj / PDF</button>
+      <button id="send" disabled>Wyślij na Telegram</button>
       <button id="carry" disabled>Przenieś otwarte sprawy na następną zmianę</button>
+      <span id="sendState" role="status"></span>
     </div>
     <div id="report" class="report">Tu pojawi się raport.</div>
   </section>
@@ -281,7 +293,8 @@
     gen: $("gen"), sample: $("sample"), clear: $("clear"),
     copy: $("copy"), report: $("report"), msg: $("msg"),
     print: $("print"), carry: $("carry"), wipe: $("wipe"), saveState: $("saveState"), history: $("history"),
-    confirm: $("confirm"), confirmText: $("confirmText"), confirmYes: $("confirmYes"), confirmNo: $("confirmNo")
+    confirm: $("confirm"), confirmText: $("confirmText"), confirmYes: $("confirmYes"), confirmNo: $("confirmNo"),
+    webhook: $("webhook"), send: $("send"), sendState: $("sendState")
   };
 
   function todayISO() {
@@ -834,6 +847,7 @@
   var KEY_DRAFT = "uebergabe.draft.v1";
   var KEY_HISTORY = "uebergabe.history.v1";
   var KEY_WHO = "uebergabe.who";
+  var KEY_WEBHOOK = "uebergabe.webhook.v1"; // adres webhooka tylko tutaj, nigdy w kodzie
   var HISTORY_LIMIT = 10;
 
   function setSaveState(ok) {
@@ -894,6 +908,7 @@
   }
 
   function persist() {
+    resetSendState();
     saveHistory();
     saveDraft();
   }
@@ -1085,6 +1100,8 @@
     el.copy.disabled = false;
     el.print.disabled = false;
     el.carry.disabled = false;
+    updateSend();
+    resetSendState();
     renderReport();
   }
 
@@ -1094,6 +1111,8 @@
     el.copy.disabled = true;
     el.print.disabled = true;
     el.carry.disabled = true;
+    updateSend();
+    resetSendState();
   }
 
   function currentSrc() {
@@ -1242,8 +1261,9 @@
   function wipeAll() {
     var ok = true;
     try {
-      [KEY_DRAFT, KEY_HISTORY, KEY_WHO].forEach(function (k) { localStorage.removeItem(k); });
+      [KEY_DRAFT, KEY_HISTORY, KEY_WHO, KEY_WEBHOOK].forEach(function (k) { localStorage.removeItem(k); });
     } catch (e) { ok = false; }
+    el.webhook.value = "";
     el.orders.value = "";
     el.notes.value = "";
     el.who.value = "";
@@ -1253,7 +1273,7 @@
     hideModel();
     renderHistory();
     el.saveState.textContent = "";
-    say(ok ? "Usunięto wersję roboczą, historię i zapamiętane imię." : "Nie udało się usunąć danych z przeglądarki.", !ok);
+    say(ok ? "Usunięto wersję roboczą, historię, zapamiętane imię i adres webhooka." : "Nie udało się usunąć danych z przeglądarki.", !ok);
   }
 
   function copyReport() {
@@ -1274,6 +1294,84 @@
     } else {
       fallback();
     }
+  }
+
+  // ---- Wysyłka na Telegram przez webhook n8n ---------------------------------
+  // Jedyne miejsce, w którym dane opuszczają przeglądarkę: tylko po kliknięciu i potwierdzeniu.
+  var SEND_QUESTION = "Raport zostanie wysłany przez n8n na grupę Telegram. Wysłać?";
+  var SEND_TIMEOUT_MS = 20000; // bez limitu zawieszone połączenie blokowałoby przycisk
+  var sending = false;
+
+  // Tylko pełny adres http(s): np. "abc" poszłoby jako adres względny na serwer tej strony
+  function webhookUrl() {
+    var u = el.webhook.value.trim();
+    return /^https?:\/\/[^\s\/]\S*$/i.test(u) ? u : "";
+  }
+
+  function updateSend() { el.send.disabled = sending || !model || !webhookUrl(); }
+
+  function setSendState(text, isErr) {
+    el.sendState.textContent = text;
+    el.sendState.className = isErr ? "err" : "";
+  }
+
+  // Po zmianie raportu stare "Wysłano ✓" wprowadzałoby w błąd
+  function resetSendState() { if (!sending) setSendState(""); }
+
+  function sendErrorText(status, body, data) {
+    var detail = data && (data.error || data.message || data.description);
+    if (detail && typeof detail === "object") detail = detail.message || detail.description || JSON.stringify(detail);
+    var text = String(detail || body || "").replace(/\s+/g, " ").trim().slice(0, 300);
+    return "Błąd n8n (HTTP " + status + "): " + (text || "pusta odpowiedź");
+  }
+
+  function sendReport() {
+    var url = webhookUrl();
+    if (sending || !model || !url) return;
+    var text = composeText();
+    sending = true;
+    updateSend();
+    setSendState("Wysyłanie…");
+    var abort = new AbortController();
+    var timer = setTimeout(function () { abort.abort(); }, SEND_TIMEOUT_MS);
+    var finish = function (message, isErr) {
+      clearTimeout(timer);
+      sending = false;
+      updateSend();
+      setSendState(message, isErr);
+    };
+    fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: text }),
+      signal: abort.signal
+    }).then(function (res) {
+      return res.text().then(function (body) {
+        var data = null;
+        try { data = JSON.parse(body); } catch (e) { /* odpowiedź nie jest JSON-em */ }
+        if (res.ok && data && data.ok === true) finish("Wysłano ✓");
+        else finish(sendErrorText(res.status, body, data), true);
+      });
+    }).catch(function () {
+      finish(abort.signal.aborted
+        ? "Brak odpowiedzi z n8n (" + SEND_TIMEOUT_MS / 1000 + " s). Sprawdź grupę, zanim wyślesz ponownie."
+        : "Brak połączenia z n8n", true);
+    });
+  }
+
+  function askSend() {
+    if (sending || !model || !webhookUrl()) return;
+    ask(SEND_QUESTION, "Tak, wyślij", sendReport);
+  }
+
+  function webhookChanged() {
+    var value = el.webhook.value.trim();
+    if (value) storeSet(KEY_WEBHOOK, value);
+    else {
+      try { localStorage.removeItem(KEY_WEBHOOK); } catch (e) { setSaveState(false); }
+    }
+    updateSend();
+    resetSendState();
   }
 
   // ---- Start i zdarzenia -----------------------------------------------------
@@ -1300,6 +1398,7 @@
   }
 
   function headerChanged() {
+    resetSendState();
     if (metaEl && model) metaEl.textContent = metaLine();
     saveDraft();
   }
@@ -1316,6 +1415,8 @@
   el.copy.addEventListener("click", copyReport);
   el.print.addEventListener("click", function () { closeConfirm(); window.print(); });
   el.carry.addEventListener("click", carryOver);
+  el.send.addEventListener("click", askSend);
+  el.webhook.addEventListener("input", webhookChanged);
   el.sample.addEventListener("click", function () {
     guardUnsaved(function () {
       draft = newDraft();
@@ -1336,7 +1437,7 @@
     say("");
   });
   el.wipe.addEventListener("click", function () {
-    ask("Usunąć wersję roboczą, historię przekazań i zapamiętane imię? Tego nie da się cofnąć.", "Tak, usuń wszystko", wipeAll);
+    ask("Usunąć wersję roboczą, historię przekazań, zapamiętane imię i adres webhooka n8n? Tego nie da się cofnąć.", "Tak, usuń wszystko", wipeAll);
   });
   el.confirmYes.addEventListener("click", function () {
     var action = pendingConfirm;
@@ -1345,7 +1446,9 @@
   });
   el.confirmNo.addEventListener("click", closeConfirm);
 
+  el.webhook.value = str(storeGet(KEY_WEBHOOK));
   restoreDraft();
+  updateSend();
   renderHistory();
 })();
 </script>
