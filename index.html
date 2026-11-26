@@ -311,7 +311,8 @@
 
   // Zwraca { header: [...], rows: [[...], ...] } albo { error: "..." }
   function parseOrders(text) {
-    var lines = text.split(/\r?\n/).filter(function (l) { return l.trim() !== ""; });
+    // Puste wiersze z Excela/CSV to także same separatory, np. ";;;;;;" albo "| | |"
+    var lines = text.split(/\r?\n/).filter(function (l) { return l.replace(/[\s;|]/g, "") !== ""; });
     if (lines.length === 0) return { header: [], rows: [] };
     var delim = detectDelimiter(lines[0]);
     if (!delim) return { error: "Nie rozpoznano separatora w pierwszym wierszu zleceń (oczekiwany tabulator, ; lub |)." };
@@ -375,9 +376,10 @@
     return map;
   }
 
-  // "8:05", "08:05", "8.05" -> minuty od północy; inaczej null
+  // "8:05", "9:5", "09.05", "905", "0905", "09:05:00", "9:05 Uhr" -> minuty od północy; inaczej null
   function parseTime(s) {
-    var m = /^(\d{1,2})[:.](\d{2})$/.exec((s || "").trim());
+    var t = (s || "").trim().replace(/\s*Uhr$/i, "");
+    var m = /^(\d{1,2})[:.](\d{1,2})(?::\d{2})?$/.exec(t) || /^(\d{1,2})(\d{2})$/.exec(t);
     if (!m) return null;
     var h = Number(m[1]), mi = Number(m[2]);
     return (h > 23 || mi > 59) ? null : h * 60 + mi;
@@ -491,7 +493,7 @@
   // ---- Etap 3: otwarte sprawy z notatek --------------------------------------
   var MISSING = "ergänzen";
   var SORT_HINT = "(Sortiert: Störung, Verspätet, dann Fehlendes/Panne ohne Termin, dann nach Termin)";
-  var URGENT_RE = /(?<!\p{L})(?:fehl(?:t|en)(?!\p{L})|brak|panne)/iu;
+  var URGENT_RE = /(?<!\p{L})(?:fehl(?:t|en|ende[nrs]?)(?!\p{L})|brak|panne)/iu;
   var NAME = "\\p{Lu}[\\p{L}-]*";
 
   // Linia jest "otwarta", jeśli zawiera któreś ze słów-kluczy (PL i DE).
@@ -501,7 +503,9 @@
     "nie (?:zrobion|wysłan)", "do zrobienia",
     "(?<!\\p{L})offen", "(?<!\\p{L})wart(?:e|en|et)(?!\\p{L})", "(?<!\\p{L})(?:an|zurück|rück)ruf",
     "(?<!\\p{L})klär", "(?<!\\p{L})fehl(?:t|en)(?!\\p{L})", "bestätig", "(?<!\\p{L})prüf", "nachfrag",
-    "muss noch", "noch nicht",
+    "muss (?:\\p{L}+ )?noch", "noch nicht",
+    "(?<!\\p{L})(?:über|nach)prüf", "(?<!\\p{L})abklär", "(?<!\\p{L})fehlende[nrs]?(?!\\p{L})", "nachreich",
+    "steht (?:noch )?aus(?!\\p{L})", "ausstehend",
     // usterki i brak terminu
     "zepsut", "kaputt", "defekt", "nie dzia", "nikt nie dał", "bez terminu", "kein(?:en)? termin"
   ].join("|"), "iu");
@@ -513,7 +517,7 @@
     { re: new RegExp("(?<!\\p{L})(" + NAME + ")\\s+(?:" + VERBS + ")", "u"), contact: false },
     { re: new RegExp("(?:→|->|decyzja|Entscheidung|zuständig|odpowiada|Verantwortlich\\p{L}*)[:\\s]+(" + NAME + ")", "iu"), contact: false },
     { re: new RegExp("\\(\\s*(" + NAME + ")\\s+(?:z|aus|von)\\s", "u"), contact: false },
-    { re: new RegExp("((?:Herr|Frau|Hr\\.|Fr\\.|Pan|Pani)\\s+" + NAME + ")", "u"), contact: true },
+    { re: new RegExp("((?:Herrn?|Frau|Hr\\.|Fr\\.|Pan|Pani)\\s+" + NAME + ")", "u"), contact: true },
     // rola zamiast imienia (najniższy priorytet)
     { re: new RegExp("(?<!\\p{L})(Hausmeister|Werkstatt|Buchhaltung|Spedition)(?!\\p{L})", "u"), contact: false }
   ];
@@ -528,12 +532,19 @@
                   pojutrze: "übermorgen", "übermorgen": "übermorgen" };
   var QUAL_MAP = { rano: "früh", "früh": "früh", wieczorem: "abends", abends: "abends",
                    vormittags: "vormittags", nachmittags: "nachmittags", "po południu": "nachmittags" };
-  var REL_RE = /(?<!\p{L})(jutro|morgen|dziś|dzisiaj|heute|pojutrze|übermorgen)(?!\p{L})(?:\s+(rano|früh|wieczorem|abends|vormittags|nachmittags|po południu))?/iu;
+  // "Guten Morgen" to powitanie, nie termin
+  var REL_RE = /(?<!\p{L})(?<!guten\s+)(jutro|morgen|dziś|dzisiaj|heute|pojutrze|übermorgen)(?!\p{L})(?:\s+(rano|früh|wieczorem|abends|vormittags|nachmittags|po południu))?/iu;
   var WD_RE = /(?<!\p{L})(?:do|bis|am|na|spätestens|najpóźniej|vor)\s+(poniedział\p{L}*|wtor\p{L}*|środ\p{L}*|czwart\p{L}*|piąt\p{L}*|sobot\p{L}*|niedziel\p{L}*|montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag)(?!\p{L})/iu;
   var DATE_RE = /(?<![\d.])(\d{1,2})\.(\d{1,2})\.(\d{4}|\d{2})?(?!\d)/;
-  // kropka jako separator godziny, ale nie dla dat typu "05.12."
-  var TIME_A = /(?<!\p{L})(?:bis|do|spätestens|najpóźniej|vor)\s+(\d{1,2})(?::|\.(?!\d{2}\.))(\d{2})(?!\d)/iu;
-  var TIME_B = /(?<!\p{L})(?:bis|do|spätestens|najpóźniej|vor)\s+(\d{1,2})\s*(?:Uhr|godz\.?)/iu;
+  // Przed godziną może stać dzień ("bis morgen 8 Uhr")
+  var TIME_PRE = "(?<!\\p{L})(?:bis|do|spätestens|najpóźniej|vor)\\s+";
+  var TIME_DAY = "(?:heute|morgen|übermorgen|jutro|dziś|dzisiaj|pojutrze)(?:\\s+(?:früh|rano|abends|wieczorem|vormittags|nachmittags))?\\s+";
+  var TIME_HEAD = "(?:" + TIME_PRE + "(?:" + TIME_DAY + ")?|(?<!\\p{L})" + TIME_DAY + "(?=\\d{1,4}\\s*Uhr))";
+  // kropka jako separator godziny, ale nie dla dat typu "05.12." (po kropce numer miesiąca i kropka)
+  var TIME_A = new RegExp(TIME_HEAD + "(\\d{1,2})(?::(\\d{1,2})|\\.(?!(?:0[1-9]|1[0-2])\\.)(\\d{2}))(?!\\d)", "iu");
+  var TIME_B = new RegExp(TIME_HEAD + "(\\d{1,2})\\s*(?:Uhr|godz\\.?)", "iu");
+  // zapis bez separatora ("905 Uhr", "1630 Uhr") tylko z "Uhr/godz", żeby nie zgadywać z gołych liczb
+  var TIME_C = new RegExp(TIME_HEAD + "(\\d{1,2})(\\d{2})\\s*(?:Uhr|godz\\.?)", "iu");
   var UNSURE_RE = /chyba|prawdopodobnie|vermutlich|wahrscheinlich/i;
 
   function pad2(n) { n = String(n); return n.length < 2 ? "0" + n : n; }
@@ -549,10 +560,18 @@
     return null;
   }
 
+  // W niemieckim rzeczowniki i początek zdania są wielką literą: te słowa to nie osoby
+  var NOT_PERSON = ("er sie es wer man ich wir niemand keiner jemand der die das bitte auch dann noch heute morgen " +
+    "kunde kundin fahrer fahrerin kollege kollegin büro lager zoll dispo disposition " +
+    "kierowca klient kto nikt ktoś").split(" ");
+
   function extractPerson(line) {
     for (var i = 0; i < PERSON_RES.length; i++) {
-      var m = PERSON_RES[i].re.exec(line);
-      if (m) return PERSON_RES[i].contact ? m[1] + " (Kontakt)" : m[1];
+      var re = new RegExp(PERSON_RES[i].re.source, PERSON_RES[i].re.flags + "g"), m;
+      while ((m = re.exec(line))) {
+        if (PERSON_RES[i].contact) return m[1] + " (Kontakt)";
+        if (NOT_PERSON.indexOf(m[1].toLowerCase()) === -1) return m[1];
+      }
     }
     return "";
   }
@@ -593,9 +612,12 @@
       var yr = m[3] ? (m[3].length === 2 ? 2000 + Number(m[3]) : Number(m[3])) : ref.getFullYear();
       offset = Math.round((new Date(yr, Number(m[2]) - 1, Number(m[1])) - ref) / 86400000);
     }
-    if ((m = TIME_A.exec(line) || TIME_B.exec(line)) && Number(m[1]) <= 23 && (m[2] === undefined || Number(m[2]) <= 59)) {
-      timePart = pad2(m[1]) + ":" + (m[2] || "00");
-      minutes = Number(m[1]) * 60 + Number(m[2] || 0);
+    if ((m = TIME_A.exec(line) || TIME_C.exec(line) || TIME_B.exec(line))) {
+      var hh = Number(m[1]), mm = Number(m[2] || m[3] || 0);
+      if (hh <= 23 && mm <= 59) {
+        timePart = pad2(hh) + ":" + pad2(mm);
+        minutes = hh * 60 + mm;
+      }
     }
     var out;
     if (dayPart && timePart) out = dayPart.indexOf("bis ") === 0 ? dayPart + ", " + timePart : dayPart + ", bis " + timePart;
