@@ -393,7 +393,7 @@
 
   function classifyStatus(s) {
     var t = (s || "").toLowerCase();
-    if (/panne|störung|stoerung|unfall|schaden|awari|problem|wypadek/.test(t)) return "problem";
+    if (/panne|störung|stoerung|unfall|schaden|defekt|kaputt|ausfall|liegen ?gebliebe|awari|problem|wypadek|zepsut|usterk/.test(t)) return "problem";
     if (/erledigt|zugestellt|abgeschlossen|geliefert|zrealizow|dostarczon/.test(t)) return "done";
     if (/verspät|verspaet|opóźn|opozn|stau|zoll/.test(t)) return "delayed";
     if (/unterwegs|laden|w trasie|załad|zalad|rozład|rozlad/.test(t)) return "moving";
@@ -420,8 +420,9 @@
     var delay = (plan !== null && eta !== null) ? delayMinutes(plan, eta) : null;
 
     var group;
-    if (reasons.length) group = "check";
-    else if (cat === "problem") group = "problem";
+    // Awaria ma pierwszeństwo: nieczytelna godzina nie może ukryć jej w "Zu prüfen" (uwaga zostaje w Hinweis)
+    if (cat === "problem") group = "problem";
+    else if (reasons.length) group = "check";
     else if (cat === "done") group = "done";
     else if (cat === "delayed" || (delay !== null && delay >= DELAY_LIMIT)) group = "delayed";
     else group = "moving";
@@ -477,7 +478,7 @@
       var fields = FIELD_ORDER.filter(function (f) {
         return f === "delay" ? g.id === "delayed" : map[f] !== undefined;
       });
-      if (g.id === "check") fields.push("hint");
+      if (list.some(function (r) { return r.hint; })) fields.push("hint");
       var head = fields.map(function (f) { return FIELD_LABEL[f]; });
       var body = list.map(function (r) { return fields.map(function (f) { return r[f]; }); });
       view.groups.push({ id: g.id, title: g.title + " (" + list.length + ")", header: head, rows: body });
@@ -504,7 +505,8 @@
     "(?<!\\p{L})offen", "(?<!\\p{L})wart(?:e|en|et)(?!\\p{L})", "(?<!\\p{L})(?:an|zurück|rück)ruf",
     "(?<!\\p{L})klär", "(?<!\\p{L})fehl(?:t|en)(?!\\p{L})", "bestätig", "(?<!\\p{L})prüf", "nachfrag",
     "muss (?:\\p{L}+ )?noch", "noch nicht",
-    "(?<!\\p{L})(?:über|nach)prüf", "(?<!\\p{L})abklär", "(?<!\\p{L})fehlende[nrs]?(?!\\p{L})", "nachreich",
+    "(?<!\\p{L})(?:nach|ab)?kontrollieren(?!\\p{L})", "(?<!\\p{L})(?:ab|nach|durch|gegen)?checken(?!\\p{L})",
+    "(?<!\\p{L})(?:über|nach)prüf","(?<!\\p{L})abklär", "(?<!\\p{L})fehlende[nrs]?(?!\\p{L})", "nachreich",
     "steht (?:noch )?aus(?!\\p{L})", "ausstehend",
     // usterki i brak terminu
     "zepsut", "kaputt", "defekt", "nie dzia", "nikt nie dał", "bez terminu", "kein(?:en)? termin"
@@ -514,7 +516,8 @@
   var VERBS = "zadzwoni|zadzwoń|oddzwoni|sprawdzi|wyśle|zajmie|zrobi|potwierdzi|prosił[a]?|ruft|prüft|klärt|kümmert|meldet|schickt";
   var PERSON_RES = [
     { re: new RegExp("@(" + NAME + ")", "u"), contact: false },
-    { re: new RegExp("(?<!\\p{L})(" + NAME + ")\\s+(?:" + VERBS + ")", "u"), contact: false },
+    // (?!\p{L}): bezokolicznik "Tacho sprawdzić" to nie "ktoś sprawdzi"
+    { re: new RegExp("(?<!\\p{L})(" + NAME + ")\\s+(?:" + VERBS + ")(?!\\p{L})", "u"), contact: false },
     { re: new RegExp("(?:→|->|decyzja|Entscheidung|zuständig|odpowiada|Verantwortlich\\p{L}*)[:\\s]+(" + NAME + ")", "iu"), contact: false },
     { re: new RegExp("\\(\\s*(" + NAME + ")\\s+(?:z|aus|von)\\s", "u"), contact: false },
     { re: new RegExp("((?:Herrn?|Frau|Hr\\.|Fr\\.|Pan|Pani)\\s+" + NAME + ")", "u"), contact: true },
