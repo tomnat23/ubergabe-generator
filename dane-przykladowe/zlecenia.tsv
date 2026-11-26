@@ -1,9 +1,9 @@
 LKW	Kennzeichen	Auftrag	Kunde	Route	Plan	ETA	Status
-LKW 01	BS-TK 1201	A-24811	Volkswagen Logistik	Wolfsburg - Poznań	08:00	08:00	Erledigt
-LKW 02	BS-TK 1202	A-24812	Bosch Hildesheim	Hildesheim - Lyon	10:30	14:10	Verspätet
-LKW 03	WF-LM 330	A-24815	Salzgitter AG	Salzgitter - Gdańsk	12:00	12:00	Unterwegs
-LKW 04	HE-DK 77	A-24819	Metro Cash&Carry	Helmstedt - Praha	13:45	15:20	Verspätet
-LKW 05	BS-TK 1205	A-24823	Continental	Hannover - Gliwice	15:00	15:00	Beladen
-LKW 06	WF-LM 332	A-24826	Siemens Energy	Braunschweig - Rotterdam	16:30	16:30	Unterwegs
-LKW 07	HE-DK 79	A-24830	Aldi Süd	Magdeburg - Wrocław	18:00		Panne
-LKW 08	BS-TK 1208	A-24833	KNAUF	Peine - Łódź	19:15	19:15	Entladen
+LKW 01	BS-TK 1201	A-24811	Westkamp Logistik GmbH	Wolfsburg - Poznań	08:00	08:00	Erledigt
+LKW 02	BS-TK 1202	A-24812	Hartwig Elektrotechnik GmbH	Hildesheim - Lyon	10:30	14:10	Verspätet
+LKW 03	WF-LM 330	A-24815	Stahlwerk Nordheim GmbH	Salzgitter - Gdańsk	12:00	12:00	Unterwegs
+LKW 04	HE-DK 77	A-24819	Frischmarkt Sommerfeld KG	Helmstedt - Praha	13:45	15:20	Verspätet
+LKW 05	BS-TK 1205	A-24823	Autoteile Brandt AG	Hannover - Gliwice	15:00	15:00	Beladen
+LKW 06	WF-LM 332	A-24826	Windkraft Teichmann GmbH	Braunschweig - Rotterdam	16:30	16:30	Unterwegs
+LKW 07	HE-DK 79	A-24830	Lindenmarkt Süd KG	Magdeburg - Wrocław	18:00		Panne
+LKW 08	BS-TK 1208	A-24833	Baustoffe Kessler KG	Peine - Łódź	19:15	19:15	Entladen

@@ -27,7 +27,7 @@ Raport powstaje według prostych reguł (słowa-klucze), bez sztucznej inteligen
 
 ## Dane przykładowe
 
-Dane przykładowe (przycisk „Wczytaj przykład” i folder `dane-przykladowe/`) są **fikcyjne**: zlecenia, numery rejestracyjne, notatki, osoby i zdarzenia zostały wymyślone. Występujące w nich nazwy znanych firm służą wyłącznie jako przykład. Projekt nie jest z tymi firmami związany, a opisane sytuacje nigdy nie miały miejsca.
+Dane przykładowe (przycisk „Wczytaj przykład” i folder `dane-przykladowe/`) są **fikcyjne**: firmy, zlecenia, numery rejestracyjne, notatki, osoby i zdarzenia zostały wymyślone. Nazwy miejscowości są prawdziwe. Ewentualna zbieżność z istniejącymi firmami, osobami lub pojazdami jest przypadkowa.
 
 ## Uruchomienie lokalne
 

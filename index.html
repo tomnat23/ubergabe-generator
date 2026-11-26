@@ -239,26 +239,26 @@
 
   var SAMPLE_ORDERS = [
     "LKW\tKennzeichen\tAuftrag\tKunde\tRoute\tPlan\tETA\tStatus",
-    "LKW 01\tBS-TK 1201\tA-24811\tVolkswagen Logistik\tWolfsburg - Poznań\t08:00\t08:00\tErledigt",
-    "LKW 02\tBS-TK 1202\tA-24812\tBosch Hildesheim\tHildesheim - Lyon\t10:30\t14:10\tVerspätet",
-    "LKW 03\tWF-LM 330\tA-24815\tSalzgitter AG\tSalzgitter - Gdańsk\t12:00\t12:00\tUnterwegs",
-    "LKW 04\tHE-DK 77\tA-24819\tMetro Cash&Carry\tHelmstedt - Praha\t13:45\t15:20\tVerspätet",
-    "LKW 05\tBS-TK 1205\tA-24823\tContinental\tHannover - Gliwice\t15:00\t15:00\tBeladen",
-    "LKW 06\tWF-LM 332\tA-24826\tSiemens Energy\tBraunschweig - Rotterdam\t16:30\t16:30\tUnterwegs",
-    "LKW 07\tHE-DK 79\tA-24830\tAldi Süd\tMagdeburg - Wrocław\t18:00\t\tPanne",
-    "LKW 08\tBS-TK 1208\tA-24833\tKNAUF\tPeine - Łódź\t19:15\t19:15\tEntladen"
+    "LKW 01\tBS-TK 1201\tA-24811\tWestkamp Logistik GmbH\tWolfsburg - Poznań\t08:00\t08:00\tErledigt",
+    "LKW 02\tBS-TK 1202\tA-24812\tHartwig Elektrotechnik GmbH\tHildesheim - Lyon\t10:30\t14:10\tVerspätet",
+    "LKW 03\tWF-LM 330\tA-24815\tStahlwerk Nordheim GmbH\tSalzgitter - Gdańsk\t12:00\t12:00\tUnterwegs",
+    "LKW 04\tHE-DK 77\tA-24819\tFrischmarkt Sommerfeld KG\tHelmstedt - Praha\t13:45\t15:20\tVerspätet",
+    "LKW 05\tBS-TK 1205\tA-24823\tAutoteile Brandt AG\tHannover - Gliwice\t15:00\t15:00\tBeladen",
+    "LKW 06\tWF-LM 332\tA-24826\tWindkraft Teichmann GmbH\tBraunschweig - Rotterdam\t16:30\t16:30\tUnterwegs",
+    "LKW 07\tHE-DK 79\tA-24830\tLindenmarkt Süd KG\tMagdeburg - Wrocław\t18:00\t\tPanne",
+    "LKW 08\tBS-TK 1208\tA-24833\tBaustoffe Kessler KG\tPeine - Łódź\t19:15\t19:15\tEntladen"
   ].join("\n");
 
   var SAMPLE_NOTES = [
     "zmiana pn nocna, ogólnie spokojnie ale kilka rzeczy do dokończenia",
     "",
-    "LKW 02 stoi w korku na A7 przed Lyonem?? kierowca mówi że ok 2h, klient Bosch uprzedzony (dzwoniłem ok 11) - Frau Becker chce potwierdzenie nowej godziny rozładunku bis 16 Uhr",
+    "LKW 02 stoi w korku na A7 przed Lyonem?? kierowca mówi że ok 2h, klient Hartwig uprzedzony (dzwoniłem ok 11) - Frau Becker chce potwierdzenie nowej godziny rozładunku bis 16 Uhr",
     "",
-    "LKW 04 Verspätung wegen Zoll Grenze CZ, Herr Novák von Metro wartet, muss noch Slot bestätigen - Kowalski zadzwoni do spedycji do 17:00",
+    "LKW 04 Verspätung wegen Zoll Grenze CZ, Herr Novák von Frischmarkt wartet, muss noch Slot bestätigen - Kowalski zadzwoni do spedycji do 17:00",
     "",
     "LKW 07 PANNE!! Reifen hinten links, Werkstatt kommt, kierowca Piotr czeka od 17:40. trzeba ustalić czy podstawić zastępczy - decyzja Schmidt, jutro rano najpóźniej 6:00",
     "",
-    "faktura dla Salzgitter AG jeszcze nie wysłana (Anna z księgowości, do piątku)",
+    "faktura dla Stahlwerk Nordheim GmbH jeszcze nie wysłana (Anna z księgowości, do piątku)",
     "",
     "brak CMR przy A-24815?? sprawdzić z kierowcą LKW 03 jak dojedzie",
     "",
@@ -270,8 +270,8 @@
     "Frau Weber (Hildesheim) wartet noch auf Rückruf wegen Lieferschein A-24812, bitte heute anrufen",
     "czekamy na potwierdzenie slotu rozładunku w Gdańsku dla LKW 03, Nowak sprawdzi to do 20:00",
     "Zoll-Papiere für LKW 06 fehlen noch",
-    "@Lena zadzwonić do Continental ws. rampy, jutro rano",
-    "Reklamacja Knauf noch offen, Schmidt klärt das bis Freitag"
+    "@Lena zadzwonić do Autoteile Brandt AG ws. rampy, jutro rano",
+    "Reklamacja Baustoffe Kessler KG noch offen, Schmidt klärt das bis Freitag"
   ].join("\n");
 
   var $ = function (id) { return document.getElementById(id); };
